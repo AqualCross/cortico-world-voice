@@ -1,0 +1,318 @@
+{
+  "tools": [
+    {
+      "name": "audio_status",
+      "description": "Report which audio capabilities are wired up right now (listen, transcribe, speak, sing, convert, play). Call it before promising any audio output when you are unsure.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "tags": [
+        "read"
+      ],
+      "summary": {
+        "zh": "报告语音能力此刻的接入状态。",
+        "en": "Reports which audio capabilities are wired up right now."
+      }
+    },
+    {
+      "name": "audio_play",
+      "description": "Play an audio file now (a local path, or a log:/mem: blob handle); later requests queue up behind it. Returns the queue id and position — playback finishes in the background, so do not wait for it.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Absolute path to the audio file; give this or handle."
+          },
+          "volume": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "Volume for this item; defaults to the configured volume."
+          },
+          "handle": {
+            "type": "string",
+            "description": "A log:/mem: blob handle for the audio; give this or path."
+          }
+        }
+      },
+      "tags": [
+        "act"
+      ],
+      "summary": {
+        "zh": "播放一个音频文件，后面的排队。",
+        "en": "Plays an audio file; later requests queue up."
+      }
+    },
+    {
+      "name": "audio_say",
+      "description": "Say a line with the configured speech engine and play it through the audio queue. Returns at once: synthesis and playback run in the background, and only a failure comes back as an audio.say_failed event. With silent=true it synthesizes in the background without playback and the file path comes back as an audio.say_done event.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "The line to say.",
+            "maxLength": 2000
+          },
+          "voice": {
+            "type": "string",
+            "description": "Optional voice for this line; empty uses the configured one."
+          },
+          "silent": {
+            "type": "boolean",
+            "description": "Synthesize only; do not play."
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "tags": [
+        "speak"
+      ],
+      "summary": {
+        "zh": "按当前引擎合成一句话并播放。",
+        "en": "Synthesizes a line with the current engine and plays it."
+      }
+    },
+    {
+      "name": "audio_convert",
+      "description": "Convert an audio file (a local path, or a log:/mem: blob handle) into the configured RVC voice and play the result through the audio queue. Returns at once: conversion runs in the background, the result lands in the speech records, and only a failure comes back as an audio.convert_failed event.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Absolute path to the audio file; give this or handle."
+          },
+          "voice": {
+            "type": "string",
+            "description": "Optional voice file name (the .pth in the voice folder); empty uses the configured one."
+          },
+          "handle": {
+            "type": "string",
+            "description": "A log:/mem: blob handle for the audio; give this or path."
+          },
+          "silent": {
+            "type": "boolean",
+            "description": "Convert only; do not play. The path and an audio blob handle come back as an audio.convert_done event."
+          }
+        }
+      },
+      "tags": [
+        "speak"
+      ],
+      "summary": {
+        "zh": "把一段音频换成当前变声音色，转完自动播放。",
+        "en": "Converts an audio file into the configured voice and plays it."
+      }
+    },
+    {
+      "name": "audio_sing",
+      "description": "Sing the given lyrics with the configured DiffSinger voicebank and play the song through the audio queue. Returns at once: synthesis runs in the background, the result lands in the speech records, and only a failure comes back as an audio.sing_failed event.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "lyrics": {
+            "type": "string",
+            "description": "Lyrics to sing; Chinese characters. Punctuation only splits phrases.",
+            "maxLength": 2000
+          },
+          "silent": {
+            "type": "boolean",
+            "description": "Sing only; do not play. The path and an audio blob handle come back as an audio.sing_done event."
+          }
+        },
+        "required": [
+          "lyrics"
+        ]
+      },
+      "tags": [
+        "speak"
+      ],
+      "summary": {
+        "zh": "用 DiffSinger 把歌词唱出来并播放。",
+        "en": "Sings lyrics with DiffSinger and plays the song."
+      }
+    },
+    {
+      "name": "audio_transcribe",
+      "description": "Transcribe an audio file (a local path, or a log:/mem: blob handle) with the configured speech-to-text engine. Returns at once: transcription runs in the background, the text lands in the transcript records and comes back as an audio.transcribed event; a failure comes back as audio.transcribe_failed.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Absolute path to the audio file; give this or handle."
+          },
+          "handle": {
+            "type": "string",
+            "description": "A log:/mem: blob handle for the audio; give this or path."
+          }
+        }
+      },
+      "tags": [
+        "read"
+      ],
+      "summary": {
+        "zh": "转写一个音频文件，完成后以事件带回文字。",
+        "en": "Transcribes an audio file in the background; the text arrives as an event."
+      }
+    },
+    {
+      "name": "audio_listen",
+      "description": "Start, stop or inspect hearing: system audio, the microphone, or one application. Lanes split audio by voice activity and transcribe each chunk, or — when a lane is set to streaming — transcribe live and cut sentences by the engine endpoints. Transcribed sentences land in the transcript records (no audio files are kept). With delivery set to notify, each audio.heard is pushed with trigger=debounce, so the core batches close sentences into one wake-up (window and batch limits come from the framework batching settings).",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "start",
+              "stop",
+              "status"
+            ],
+            "description": "start, stop or status."
+          },
+          "source": {
+            "type": "string",
+            "description": "system, mic, or an application process name / PID. Omit to start or stop every configured lane."
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "tags": [
+        "act"
+      ],
+      "summary": {
+        "zh": "开始、停止或查看本机声音监听。",
+        "en": "Starts, stops or inspects hearing."
+      }
+    },
+    {
+      "name": "audio_queue",
+      "description": "Inspect or change the playback queue: list it, skip the current item, remove one queued item by id, or stop and clear everything.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "act": {
+            "type": "string",
+            "enum": [
+              "list",
+              "skip",
+              "remove",
+              "clear"
+            ],
+            "description": "list, skip, remove or clear."
+          },
+          "id": {
+            "type": "string",
+            "description": "Queue id to remove (only for act=remove)."
+          }
+        },
+        "required": [
+          "act"
+        ]
+      },
+      "tags": [
+        "act"
+      ],
+      "summary": {
+        "zh": "查看或改动播放队列。",
+        "en": "Inspect or change the playback queue."
+      }
+    }
+  ],
+  "events": [
+    {
+      "type": "audio.started",
+      "description": {
+        "zh": "声音 World 已挂载。",
+        "en": "The audio World was mounted."
+      }
+    },
+    {
+      "type": "audio.heard",
+      "description": {
+        "zh": "从某一路声音里切出一块并（可自动）转成文字，正文存进转写记录；事件默认只归档，打开「通知 Coo」时按内核 debounce 投递，几句会在同一次唤醒里一起给到模型。",
+        "en": "A chunk was cut from one listening lane and transcribed (when enabled); the text goes to the transcript records. Archived by default; with notify on the event is pushed with trigger=debounce, so the core batches close sentences into one wake-up."
+      }
+    },
+    {
+      "type": "audio.say_failed",
+      "description": {
+        "zh": "后台合成一句话失败了；成功不打扰。",
+        "en": "A background audio_say synthesis failed; successes stay silent."
+      }
+    },
+    {
+      "type": "audio.convert_failed",
+      "description": {
+        "zh": "后台变声失败了；成功不打扰。",
+        "en": "A background audio_convert conversion failed; successes stay silent."
+      }
+    },
+    {
+      "type": "audio.sing_failed",
+      "description": {
+        "zh": "后台唱歌失败了；成功不打扰。",
+        "en": "A background audio_sing synthesis failed; successes stay silent."
+      }
+    },
+    {
+      "type": "audio.say_done",
+      "description": {
+        "zh": "silent 合成完成，带回本地路径与音频附件句柄。",
+        "en": "A silent audio_say finished; it carries the local path and the audio as a blob attachment."
+      }
+    },
+    {
+      "type": "audio.transcribed",
+      "description": {
+        "zh": "后台转写完成，带回文字。",
+        "en": "A background transcription finished; it carries the text."
+      }
+    },
+    {
+      "type": "audio.transcribe_failed",
+      "description": {
+        "zh": "后台转写失败。",
+        "en": "A background transcription failed."
+      }
+    },
+    {
+      "type": "audio.convert_done",
+      "description": {
+        "zh": "silent 变声完成，带回本地路径与音频附件句柄。",
+        "en": "A silent audio_convert finished; it carries the local path and the audio as a blob attachment."
+      }
+    },
+    {
+      "type": "audio.sing_done",
+      "description": {
+        "zh": "silent 唱歌完成，带回本地路径与音频附件句柄。",
+        "en": "A silent audio_sing finished; it carries the local path and the audio as a blob attachment."
+      }
+    }
+  ],
+  "prompts": [
+    {
+      "key": "worlds.audio.envPrompt",
+      "title": "提示词",
+      "role": "envPrompt",
+      "content": ""
+    }
+  ]
+}

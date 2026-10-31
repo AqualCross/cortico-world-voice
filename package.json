@@ -1,0 +1,93 @@
+{
+  "name": "cortico-world-voice",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "让Coo能听能说。",
+  "author": "AqualCross",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AqualCross/cortico-world-voice.git"
+  },
+  "homepage": "https://github.com/AqualCross/cortico-world-voice#readme",
+  "bugs": {
+    "url": "https://github.com/AqualCross/cortico-world-voice/issues"
+  },
+  "keywords": [
+    "cortico-world",
+    "cortico",
+    "coopanion",
+    "voice",
+    "tts",
+    "stt",
+    "singing",
+    "voice-conversion"
+  ],
+  "os": [
+    "win32"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@11.5.0",
+  "main": "./src/index.ts",
+  "cortico": {
+    "kind": "world",
+    "api": 6,
+    "displayName": "声音",
+    "locales": {
+      "zh": {
+        "displayName": "声音",
+        "description": "让Coo能听能说。"
+      },
+      "en": {
+        "displayName": "Audio",
+        "description": "Lets Coo hear and speak."
+      }
+    },
+    "tags": [
+      "voice",
+      "local",
+      "experimental"
+    ],
+    "describe": "describe.json",
+    "webUiClient": "dist/webui.js",
+    "icon": "assets/icon.svg"
+  },
+  "files": [
+    "src",
+    "dist",
+    "assets",
+    "README.md",
+    "CHANGELOG.md",
+    "describe.json",
+    "THIRD_PARTY_NOTICES.md",
+    "vendor",
+    "python"
+  ],
+  "scripts": {
+    "build": "node scripts/build-webui.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build && npm test && npm run typecheck"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "cortico": "^0.2.3",
+    "esbuild": "^0.28.2",
+    "jsdom": "^30.0.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "dependencies": {
+    "audify": "1.10.1",
+    "loopback-capture": "^3.0.2",
+    "onnxruntime-node": "^1.31.1",
+    "sherpa-onnx-node": "^1.13.8"
+  }
+}

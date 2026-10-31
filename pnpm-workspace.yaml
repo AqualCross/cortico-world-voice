@@ -1,0 +1,4 @@
+allowBuilds:
+  esbuild: true
+  audify: true
+  onnxruntime-node: set this to true or false

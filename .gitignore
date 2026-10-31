@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.log
+
+# 开发用文档：只留在本地，不进仓库
+spec.md
+AGENTS.md
+CLAUDE.md

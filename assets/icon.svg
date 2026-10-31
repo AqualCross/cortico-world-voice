@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title">
+  <title>Voice waveform whale</title>
+  <g fill="#4e61ff">
+    <rect x="18" y="101.75" width="10" height="42.75" rx="5"/>
+    <rect x="33" y="76.13" width="10" height="98.38" rx="5"/>
+    <rect x="48" y="64.88" width="10" height="124.5" rx="5"/>
+    <rect x="63" y="59.75" width="10" height="139.25" rx="5"/>
+    <rect x="78" y="58.38" width="10" height="146.38" rx="5"/>
+    <rect x="93" y="59.63" width="10" height="147.63" rx="5"/>
+    <rect x="108" y="55.25" width="10" height="151.88" rx="5"/>
+    <rect x="123" y="52.63" width="10" height="152.13" rx="5"/>
+    <rect x="138" y="82" width="10" height="116.63" rx="5"/>
+    <rect x="153" y="96.88" width="10" height="95.13" rx="5"/>
+    <rect x="168" y="50.5" width="10" height="41.5" rx="5"/>
+    <rect x="168" y="108.5" width="10" height="64.75" rx="5"/>
+    <rect x="168" y="177.5" width="10" height="16.75" rx="5"/>
+    <rect x="183" y="66.13" width="10" height="87.62" rx="5"/>
+    <rect x="183" y="183.63" width="10" height="8.62" rx="5"/>
+    <rect x="198" y="73.25" width="10" height="29.88" rx="5"/>
+    <rect x="213" y="70.75" width="10" height="27.5" rx="5"/>
+    <rect x="228" y="61.63" width="10" height="18.88" rx="5"/>
+  </g>
+</svg>
