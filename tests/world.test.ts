@@ -17,12 +17,11 @@ describe('Audio World', () => {
     expect(report.failures).toEqual([]);
   });
 
-  it('挂载时投一条 audio.started 事件，origin 是 external', async () => {
+  it('挂载时不投递启动事件', async () => {
     const world = AUDIO.create(fakeWorldContext(AUDIO, { scratchDir }));
     const host = new FakeHost();
     await world.start(host);
-    expect(host.events.map((e) => e.type)).toEqual(['audio.started']);
-    expect(host.events[0].origin).toBe('external');
+    expect(host.events).toEqual([]);
     await world.stop();
   });
 

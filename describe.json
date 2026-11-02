@@ -237,13 +237,6 @@
   ],
   "events": [
     {
-      "type": "audio.started",
-      "description": {
-        "zh": "声音 World 已挂载。",
-        "en": "The audio World was mounted."
-      }
-    },
-    {
       "type": "audio.heard",
       "description": {
         "zh": "从某一路声音里切出一块并（可自动）转成文字，正文存进转写记录；事件默认只归档，打开「通知 Coo」时按内核 debounce 投递，几句会在同一次唤醒里一起给到模型。",

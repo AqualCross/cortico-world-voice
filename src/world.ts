@@ -613,14 +613,6 @@ export class AudioWorld implements World {
     // 挂载时先探一次显卡：档位与权重都按它解析，别等第一次说话才发现还没检测过。
     void this.gpu();
     this.hearing.start();
-    await host.pushEvent({
-      type: 'audio.started',
-      ts: nowIso(this.opts.timezone),
-      source: this.id,
-      origin: 'external',
-      senderKey: this.id,
-      text: '声音 World 已挂载；按勾选的来源在听，audio_status 报告当前状态。',
-    });
   }
 
   async stop(): Promise<void> {

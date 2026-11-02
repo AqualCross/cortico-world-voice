@@ -10,7 +10,7 @@ Owner: `src/definition.ts`
 |---|---|
 | `src/definition.ts` | `WorldDefinition`：id、label、默认配置段、`create()`、`describe` |
 | `src/config.ts` | 配置段类型、默认值与配置键声明（面板写回时按它验收） |
-| `src/world.ts` | `World` 实现：挂载事件、`audio_status`、依赖页的 `invoke` 与状态快照 |
+| `src/world.ts` | `World` 实现：生命周期、`audio_status`、依赖页的 `invoke` 与状态快照 |
 | `src/gpu.ts` | `nvidia-smi` 检测、解析与选档（≥ 4 GB 走显卡档） |
 | `src/uv.ts` | uv 识别（配置 → PATH → 常见位置 → 自己装的那份）与安装 |
 | `src/ffmpeg.ts` | ffmpeg 识别与安装 |

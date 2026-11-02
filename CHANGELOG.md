@@ -1,3 +1,7 @@
+## Unreleased
+
+- 删除挂载时的 `audio.started` 事件及其声明；启动时不再推送通知。
+
 ## 0.1.0
 
 - 首个版本：把「听、转写、说话、唱歌、变声、播放」收进一个 World，取代原来的 tts / stt / listen / audio-play 四个扩展。

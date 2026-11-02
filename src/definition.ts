@@ -28,7 +28,6 @@ export const AUDIO: WorldDefinition<AudioConfigSection> = {
       },
     }),
     events: [
-      { type: 'audio.started', description: { zh: '声音 World 已挂载。', en: 'The audio World was mounted.' } },
       {
         type: 'audio.heard',
         description: {
