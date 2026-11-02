@@ -1,8 +1,10 @@
 /**
  * 系统代理：Windows 上代理开关在注册表的 IE 设置里，进程环境变量通常没有。
- * 上游模型站（Hugging Face、PyTorch）直连很慢，所以子进程与 fetch 都按这份设置走。
+ * 子进程由 `proxyEnv()` 单独给环境变量；本扩展自己的 fetch 走 `fetchWithProxy()` 按请求加代理，
+ * 不改宿主进程的代理变量。
  */
 import { execFile } from 'node:child_process';
+import { ProxyAgent, fetch as undiciFetch } from 'undici';
 
 const KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings';
 
@@ -75,26 +77,52 @@ const DIRECT_HOSTS: readonly string[] = [
 
 const NO_PROXY_LIST = DIRECT_HOSTS.join(',');
 
+/** 这些镜像站和本机地址直连；按主机名（含子域）判断，不看 URL。 */
+export function isDirectHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return DIRECT_HOSTS.some((entry) => host === entry || host.endsWith(`.${entry}`));
+}
+
+function noProxyHost(hostname: string): boolean {
+  const list = `${process.env.NO_PROXY ?? process.env.no_proxy ?? ''}`
+    .split(',')
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+  const host = hostname.toLowerCase();
+  return list.some((item) => item === '*' || host === item || host.endsWith(`.${item}`));
+}
+
+let agent: { url: string; dispatcher: ProxyAgent } | null = null;
+
+function agentFor(url: string): ProxyAgent {
+  if (agent?.url === url) return agent.dispatcher;
+  void agent?.dispatcher.close().catch(() => {});
+  agent = { url, dispatcher: new ProxyAgent(url) };
+  return agent.dispatcher;
+}
+
+/** 宿主环境里的代理优先；没有再看系统 IE 代理。 */
+function configuredProxy(): string | null {
+  const value = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy || '';
+  return value ? normalizeProxy(value) : null;
+}
+
+/** 给本扩展自己的 fetch 按请求挂代理；镜像站与本机地址直连，不改宿主环境变量。 */
+export async function fetchWithProxy(input: string, init: RequestInit = {}): Promise<Response> {
+  const target = new URL(input);
+  if (isDirectHost(target.hostname) || noProxyHost(target.hostname)) return fetch(input, init);
+  const proxy = configuredProxy() ?? (await systemProxy()).url;
+  if (!proxy) return fetch(input, init);
+  return undiciFetch(
+    input,
+    { ...init, dispatcher: agentFor(proxy) } as Parameters<typeof undiciFetch>[1],
+  ) as unknown as Response;
+}
+
 /** 给子进程用的代理环境变量；进程自己已有设置时不覆盖。 */
 export async function proxyEnv(): Promise<Record<string, string>> {
   if (process.env.HTTPS_PROXY || process.env.https_proxy) return {};
   const { url } = await systemProxy();
   if (!url) return {};
   return { HTTP_PROXY: url, HTTPS_PROXY: url, NO_PROXY: NO_PROXY_LIST };
-}
-
-/** 让本进程的 `fetch` 也走系统代理（Node 读这两个变量决定要不要用环境代理）。 */
-export async function applyFetchProxy(): Promise<void> {
-  const extra = await proxyEnv();
-  if (!extra.HTTPS_PROXY) return;
-  process.env.HTTPS_PROXY ??= extra.HTTPS_PROXY;
-  process.env.HTTP_PROXY ??= extra.HTTP_PROXY;
-  // 宿主可能已经设了 NO_PROXY：并进去而不是整个放弃，否则镜像站又会被代理拖住。
-  const existing = process.env.NO_PROXY ?? process.env.no_proxy ?? '';
-  const merged = DIRECT_HOSTS.some((host) => existing.split(',').includes(host))
-    ? existing
-    : [existing, NO_PROXY_LIST].filter(Boolean).join(',');
-  process.env.NO_PROXY = merged;
-  process.env.no_proxy = merged;
-  process.env.NODE_USE_ENV_PROXY ??= '1';
 }

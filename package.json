@@ -91,6 +91,7 @@
     "loopback-capture": "^3.0.2",
     "onnxruntime-node": "^1.31.1",
     "sherpa-onnx-node": "^1.13.8",
-    "spessasynth_core": "4.3.22"
+    "spessasynth_core": "4.3.22",
+    "undici": "7.29.1"
   }
 }

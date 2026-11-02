@@ -5,7 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { spawn } from 'node:child_process';
-import { applyFetchProxy } from './proxy.ts';
+import { fetchWithProxy } from './proxy.ts';
 
 export interface DownloadOptions {
   signal: AbortSignal;
@@ -24,9 +24,8 @@ export interface DownloadOptions {
 /** 把一个地址下到 `dest`。返回最终字节数。 */
 export async function download(url: string, dest: string, opts: DownloadOptions): Promise<number> {
   const { signal, onBytes, onProgress, resume = true, onTotal, stallMs = 60_000 } = opts;
-  await applyFetchProxy();
   const existing = resume && existsSync(dest) ? statSync(dest).size : 0;
-  const res = await fetch(url, {
+  const res = await fetchWithProxy(url, {
     signal,
     redirect: 'follow',
     headers: existing > 0 ? { range: `bytes=${existing}-` } : undefined,

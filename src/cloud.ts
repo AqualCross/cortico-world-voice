@@ -7,6 +7,8 @@
  * - OpenAI 兼容 TTS：`<base>/v1/audio/speech`（base 已带 /v1 则不重复），扁平 body，回原始音频字节。
  */
 
+import { fetchWithProxy } from './proxy.ts';
+
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 export class CloudError extends Error {
@@ -130,7 +132,7 @@ export async function synthesizeCloud(opts: {
   fetchImpl?: FetchLike;
   timeoutMs?: number;
 }): Promise<Buffer> {
-  const fetchImpl = opts.fetchImpl ?? fetch;
+  const fetchImpl = opts.fetchImpl ?? fetchWithProxy;
   const signal = AbortSignal.timeout(opts.timeoutMs ?? 60_000);
   const format = opts.format ?? 'wav';
   const request = opts.engine === 'dashscope'

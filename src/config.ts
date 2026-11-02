@@ -136,6 +136,7 @@ export const AUDIO_DEFAULTS: AudioConfigSection = {
     textLang: 'auto',
     gptSovits: { tier: 'auto', refAudio: '', refText: '', speed: 1 },
     dashscope: {
+      // 千问AI平台官方入口（platform.qianwenai.com），不是私有域名。
       baseUrl: 'https://maas.qianwenaiapi.com',
       model: 'qwen-audio-3.1-tts-flash',
       voice: 'longanhuan_v3.1',
@@ -319,7 +320,7 @@ export const AUDIO_CONFIG_GROUP: ConfigGroup = {
       [`${K}.speak.dashscope.baseUrl`]: {
         type: 'string',
         title: 'DashScope 地址',
-        description: '默认 https://maas.qianwenaiapi.com（千问AI平台，官方入口）；经典 DashScope 填 https://dashscope.aliyuncs.com，按 API Key 属于哪边选。',
+        description: '默认 https://maas.qianwenaiapi.com（千问AI平台官方入口，platform.qianwenai.com）；经典 DashScope 填 https://dashscope.aliyuncs.com，按 API Key 属于哪边选。',
         'x-hot': true,
       },
       [`${K}.speak.dashscope.format`]: {

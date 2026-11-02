@@ -78,11 +78,15 @@ export async function detectUv(override = ''): Promise<UvInfo> {
   return { path: null, version: null, source: null, detail: tried.length ? `试过 ${tried.length} 处，都不像 uv` : '没有找到 uv' };
 }
 
-/** 官方独立包（Windows x64）。镜像在前，GitHub 在后。 */
+/** 官方独立包（Windows x64），版本与哈希固定；镜像在前，GitHub 在后。 */
+export const UV_VERSION = '0.13.6';
+export const UV_ZIP_BYTES = 15_239_500;
+export const UV_ZIP_SHA256 = 'a2a8820d5eea32f08ef467ef3b7f66883a9b076d5737a2fc2fbb5f458d1bb50f';
+const uvUrl = (prefix: string): string => `${prefix}https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-pc-windows-msvc.zip`;
 export const UV_ZIP_SOURCES: readonly string[] = [
-  'https://ghfast.top/https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip',
-  'https://gh-proxy.com/https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip',
-  'https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip',
+  uvUrl('https://ghfast.top/'),
+  uvUrl('https://gh-proxy.com/'),
+  uvUrl(''),
 ];
 
 /**
@@ -95,7 +99,7 @@ export async function installUv(into: string, signal: AbortSignal, onBytes?: (n:
   rmSync(tmp, { recursive: true, force: true });
   mkdirSync(tmp, { recursive: true });
   const archive = join(tmp, 'uv.zip');
-  await downloadVerified(UV_ZIP_SOURCES, archive, { signal, onBytes });
+  await downloadVerified(UV_ZIP_SOURCES, archive, { signal, onBytes, bytes: UV_ZIP_BYTES, sha256: UV_ZIP_SHA256 });
   await extractZip(archive, tmp);
   rmSync(archive, { force: true });
   const exe = findUvExe(tmp);

@@ -78,11 +78,15 @@ export async function detectFfmpeg(override = ''): Promise<FfmpegInfo> {
   return { path: null, version: null, source: null, detail: tried.length ? `试过 ${tried.length} 处，都不像 ffmpeg` : '没有找到 ffmpeg' };
 }
 
-/** BtbN 的 Windows 静态包；镜像在前，GitHub 在后。 */
+/** BtbN 的 Windows 静态包，固定到某个 autobuild tag 并校验哈希；镜像在前，GitHub 在后。 */
+export const FFMPEG_BUILD = 'autobuild-2026-11-01-12-49';
+export const FFMPEG_ZIP_BYTES = 201_757_577;
+export const FFMPEG_ZIP_SHA256 = 'ad99b0b94e68f2932391ad982c193b847c93ba41f17b7cafbf50710e15d45185';
+const ffmpegUrl = (prefix: string): string => `${prefix}https://github.com/BtbN/FFmpeg-Builds/releases/download/${FFMPEG_BUILD}/ffmpeg-N-128273-g836436cfb9-win64-gpl.zip`;
 export const FFMPEG_ZIP_SOURCES: readonly string[] = [
-  'https://ghfast.top/https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-gpl.zip',
-  'https://gh-proxy.com/https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-gpl.zip',
-  'https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-gpl.zip',
+  ffmpegUrl('https://ghfast.top/'),
+  ffmpegUrl('https://gh-proxy.com/'),
+  ffmpegUrl(''),
 ];
 
 /** 下载静态包，把 ffmpeg.exe 与 ffprobe.exe 放到 `<into>/`。 */
@@ -92,7 +96,7 @@ export async function installFfmpeg(into: string, signal: AbortSignal, onBytes?:
   rmSync(tmp, { recursive: true, force: true });
   mkdirSync(tmp, { recursive: true });
   const archive = join(tmp, 'ffmpeg.zip');
-  await downloadVerified(FFMPEG_ZIP_SOURCES, archive, { signal, onBytes });
+  await downloadVerified(FFMPEG_ZIP_SOURCES, archive, { signal, onBytes, bytes: FFMPEG_ZIP_BYTES, sha256: FFMPEG_ZIP_SHA256 });
   await extractZip(archive, tmp);
   rmSync(archive, { force: true });
   const found = findExes(tmp);
