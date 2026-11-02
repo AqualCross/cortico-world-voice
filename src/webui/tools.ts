@@ -1,6 +1,6 @@
 /**
  * 「工具」页：与 `cortico-world-listen`（听觉）的工具页同一套 DOM/CSS 与交互。
- * 列出每个工具的可改文字（描述、参数说明），保存为部署覆盖；搜索、保存、恢复默认。
+ * 每个工具的模型可见性与可改文字（描述、参数说明），保存为部署覆盖。
  */
 import type { WebUiPanel, WebUiPanelContext } from 'cortico/web/shared/client-panel.ts';
 
@@ -17,6 +17,7 @@ interface Field {
 
 interface ToolView {
   name: string;
+  enabled?: boolean;
   tags?: string[];
   summary?: string | { zh: string; en: string };
   fields: Field[];
@@ -25,6 +26,8 @@ interface ToolView {
 interface View {
   revision: string;
   overrides: Record<string, Record<string, string>>;
+  disabledTools?: string[];
+  defaultDisabledTools?: string[];
   warnings: Array<{ layer: string; tool?: string; path?: string; error?: string }>;
   tools: ToolView[];
 }
@@ -39,6 +42,13 @@ const STYLE = `
 .li-tools .li-tool-name { font-family: inherit; font-weight: 600; }
 .li-tools .li-tool-tag { border: 1px solid rgba(128,128,128,.4); border-radius: 6px; padding: 1px 6px; font-size: 11px; opacity: .8; }
 .li-tools .li-tool-source { margin-left: auto; font-size: 11px; opacity: .65; }
+.li-tools .li-tool-switch { position: relative; width: 34px; height: 20px; padding: 0; border: 1px solid rgba(128,128,128,.45); border-radius: 12px; background: rgba(128,128,128,.25); cursor: pointer; flex-shrink: 0; }
+.li-tools .li-tool-switch::after { content: ''; position: absolute; width: 14px; height: 14px; top: 2px; left: 2px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px #0003; }
+.li-tools .li-tool-switch[aria-checked="true"] { background: var(--accent, #6864d9); border-color: transparent; }
+.li-tools .li-tool-switch[aria-checked="true"]::after { left: 16px; }
+.li-tools .li-tool-switch:focus-visible { outline: 2px solid var(--accent, #6864d9); outline-offset: 3px; }
+.li-tools .li-tool-switch:disabled { opacity: .5; cursor: wait; }
+.li-tools .li-tool-card[data-enabled="false"] .li-tool-name { opacity: .55; }
 .li-tools .li-tool-body { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 12px; }
 .li-tools .li-tool-field { display: flex; flex-direction: column; gap: 6px; }
 .li-tools .li-tool-field > label { font-size: 12px; opacity: .8; }
@@ -56,11 +66,13 @@ const TEXT = {
     toolsSave: '保存修改',
     toolsReset: '恢复默认',
     toolsSearch: '筛选工具名或说明',
-    toolsDirty: '有未保存的工具说明',
-    toolsSaved: '工具说明已保存。',
-    toolsRestored: '已移除部署覆盖。',
-    toolsResetTitle: '恢复全部工具说明？',
-    toolsResetBody: '移除本部署的工具说明覆盖，并放弃未保存的修改。',
+    toolsDirty: '有未保存的工具设置',
+    toolsSaved: '工具设置已保存；重载系统前缀后生效。',
+    toolsRestored: '工具设置已恢复默认；重载系统前缀后生效。',
+    toolsResetTitle: '恢复全部工具设置？',
+    toolsResetBody: '恢复工具开关的默认状态，移除本部署的工具说明覆盖，并放弃未保存的修改。',
+    toolsHelp: '关闭的工具不提供给模型。保存后请点「前缀待重载」更新当前会话。此处只控制工具调用，声音采集与通知仍由「听」页控制。',
+    toolsToggle: '向模型开放工具',
     toolsDefaultText: '默认文字',
     toolsNoDescription: '尚未声明说明',
     toolsToolDescription: '工具描述',
@@ -69,7 +81,7 @@ const TEXT = {
     toolsSourceDefault: '扩展默认',
     toolsSourcePackage: 'bot 包覆盖',
     toolsSourceDeployment: '部署覆盖',
-    toolsInvalidFile: '覆盖文件无法读取，使用上层默认文字。',
+    toolsInvalidFile: '覆盖文件无法读取；部署设置损坏时全部工具暂时关闭，请恢复默认或修复文件。',
     toolsStale: '以下覆盖字段已不存在，未应用：',
     toolsTitle: '标题',
     toolsDescription: '说明',
@@ -84,11 +96,13 @@ const TEXT = {
     toolsSave: 'Save changes',
     toolsReset: 'Restore defaults',
     toolsSearch: 'Filter tool names or descriptions',
-    toolsDirty: 'Unsaved tool text',
-    toolsSaved: 'Tool text saved.',
-    toolsRestored: 'Deployment overrides removed.',
-    toolsResetTitle: 'Restore all tool text?',
-    toolsResetBody: 'Remove this deployment\u2019s tool text overrides and discard unsaved changes.',
+    toolsDirty: 'Unsaved tool settings',
+    toolsSaved: 'Tool settings saved; reload the system prefix to apply.',
+    toolsRestored: 'Tool defaults restored; reload the system prefix to apply.',
+    toolsResetTitle: 'Restore all tool settings?',
+    toolsResetBody: 'Restore the default tool switches, remove this deployment\u2019s tool text overrides and discard unsaved changes.',
+    toolsHelp: 'Disabled tools are hidden from the model. After saving, click “Prefix drifted” to update this session. These switches control tool calls; sound capture and notifications are controlled on the Hearing tab.',
+    toolsToggle: 'Expose tool to the model',
     toolsDefaultText: 'Default text',
     toolsNoDescription: 'No description declared',
     toolsToolDescription: 'Tool description',
@@ -97,7 +111,7 @@ const TEXT = {
     toolsSourceDefault: 'Extension default',
     toolsSourcePackage: 'Bot package override',
     toolsSourceDeployment: 'Deployment override',
-    toolsInvalidFile: 'The override file cannot be read; inherited text is used.',
+    toolsInvalidFile: 'An override file cannot be read. If deployment settings are invalid, all tools are hidden until you restore defaults or repair the file.',
     toolsStale: 'These override fields no longer exist and are not applied:',
     toolsTitle: 'Title',
     toolsDescription: 'Description',
@@ -139,7 +153,7 @@ export const toolsPanel: WebUiPanel = {
     const list = ctx.ui.h('div');
     const empty = ctx.ui.h('div', 'li-empty', tx.toolsEmpty);
     empty.hidden = true;
-    root.append(toolbar, status, warnings, list, empty);
+    root.append(toolbar, ctx.ui.h('p', 'li-sub', tx.toolsHelp), status, warnings, list, empty);
 
     const TAG_TEXT: Record<string, string> = {
       read: tx.tagRead,
@@ -152,13 +166,15 @@ export const toolsPanel: WebUiPanel = {
     let state: View | null = null;
     let busy = false;
     let entries: Array<{ input: HTMLTextAreaElement; field: Field; tool: string; resetBtn: HTMLButtonElement }> = [];
+    let toggles: Array<{ button: HTMLButtonElement; tool: ToolView; enabled: boolean }> = [];
     let cards: Array<{ card: HTMLElement; text: () => string }> = [];
 
     const say = (line: string, bad = false): void => {
       status.textContent = line || '';
       status.classList.toggle('bad', bad);
     };
-    const dirty = (): boolean => entries.some(({ input, field }) => input.value !== field.text);
+    const dirty = (): boolean => entries.some(({ input, field }) => input.value !== field.text)
+      || toggles.some(({ tool, enabled }) => enabled !== (tool.enabled !== false));
     const update = (): void => {
       if (!state) {
         saveBtn.disabled = true;
@@ -166,9 +182,15 @@ export const toolsPanel: WebUiPanel = {
         return;
       }
       saveBtn.disabled = busy || !dirty();
+      const disabled = state.disabledTools ?? [];
+      const defaults = state.defaultDisabledTools ?? [];
+      const customSwitches = disabled.length !== defaults.length || disabled.some((name) => !defaults.includes(name));
       resetBtn.disabled = busy || (!Object.keys(state.overrides).length
+        && !customSwitches && !dirty()
         && !(state.warnings ?? []).some((warning) => warning.layer === 'deployment' && warning.error));
       for (const entry of entries) entry.resetBtn.disabled = busy || entry.input.value === entry.field.inheritedText;
+      for (const entry of entries) entry.input.disabled = busy;
+      for (const toggle of toggles) toggle.button.disabled = busy;
     };
     const filter = (): void => {
       const query = search.value.trim().toLocaleLowerCase();
@@ -202,6 +224,7 @@ export const toolsPanel: WebUiPanel = {
     const render = (): void => {
       if (!state) return;
       entries = [];
+      toggles = [];
       cards = [];
       list.replaceChildren();
       warnings.replaceChildren();
@@ -220,6 +243,26 @@ export const toolsPanel: WebUiPanel = {
           : (tool.summary?.[(ctx.language ?? 'zh') === 'en' ? 'en' : 'zh'] ?? '')));
         const source = ctx.ui.h('span', 'li-tool-source');
         summary.appendChild(source);
+        const toggleButton = ctx.ui.h('button', 'li-tool-switch');
+        toggleButton.type = 'button';
+        toggleButton.setAttribute('role', 'switch');
+        toggleButton.setAttribute('aria-label', `${tx.toolsToggle}: ${tool.name}`);
+        const toggle = { button: toggleButton, tool, enabled: tool.enabled !== false };
+        toggles.push(toggle);
+        const updateToggle = (): void => {
+          toggleButton.setAttribute('aria-checked', String(toggle.enabled));
+          card.dataset.enabled = String(toggle.enabled);
+        };
+        toggleButton.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          toggle.enabled = !toggle.enabled;
+          updateToggle();
+          update();
+          say(dirty() ? tx.toolsDirty : '');
+        });
+        updateToggle();
+        summary.appendChild(toggleButton);
         card.appendChild(summary);
 
         const body = ctx.ui.h('div', 'li-tool-body');
@@ -292,9 +335,15 @@ export const toolsPanel: WebUiPanel = {
         else overrides[tool][field.path] = input.value;
         if (!Object.keys(overrides[tool]).length) delete overrides[tool];
       }
-      state = await ctx.invoke<View>('save', [{ expectedRevision: state.revision, overrides }]);
+      const disabled = new Set(state.disabledTools);
+      for (const { tool, enabled } of toggles) {
+        if (enabled) disabled.delete(tool.name);
+        else disabled.add(tool.name);
+      }
+      state = await ctx.invoke<View>('save', [{ expectedRevision: state.revision, overrides, disabledTools: [...disabled] }]);
       say(tx.toolsSaved);
       render();
+      await ctx.refresh();
     });
 
     const reset = (): Promise<void> => run(async () => {
@@ -304,6 +353,7 @@ export const toolsPanel: WebUiPanel = {
       state = await ctx.invoke<View>('reset', [{ expectedRevision: state.revision }]);
       say(tx.toolsRestored);
       render();
+      await ctx.refresh();
     });
 
     search.addEventListener('input', () => { filter(); });

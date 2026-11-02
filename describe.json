@@ -27,15 +27,15 @@
             "type": "string",
             "description": "Absolute path to the audio file; give this or handle."
           },
+          "handle": {
+            "type": "string",
+            "description": "A log:/mem: blob handle for the audio; give this or path."
+          },
           "volume": {
             "type": "number",
             "minimum": 0,
             "maximum": 100,
             "description": "Volume for this item; defaults to the configured volume."
-          },
-          "handle": {
-            "type": "string",
-            "description": "A log:/mem: blob handle for the audio; give this or path."
           }
         }
       },
@@ -49,7 +49,7 @@
     },
     {
       "name": "audio_say",
-      "description": "Say a line with the configured speech engine and play it through the audio queue. Returns at once: synthesis and playback run in the background, and only a failure comes back as an audio.say_failed event. With silent=true it synthesizes in the background without playback and the file path comes back as an audio.say_done event.",
+      "description": "Say a line with the configured speech engine and play it through the audio queue. Returns at once: synthesis and playback run in the background, and only a failure comes back as an audio.failed event. With silent=true it synthesizes in the background without playback and the file path comes back as an audio.say_done event.",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -82,22 +82,22 @@
     },
     {
       "name": "audio_convert",
-      "description": "Convert an audio file (a local path, or a log:/mem: blob handle) into the configured RVC voice and play the result through the audio queue. Returns at once: conversion runs in the background, the result lands in the speech records, and only a failure comes back as an audio.convert_failed event.",
+      "description": "Convert an audio file (a local path, or a log:/mem: blob handle) into the configured RVC voice and play the result through the audio queue. Returns at once: conversion runs in the background, the result lands in the speech records, and only a failure comes back as an audio.failed event.",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
           "path": {
             "type": "string",
-            "description": "Absolute path to the audio file; give this or handle."
-          },
-          "voice": {
-            "type": "string",
-            "description": "Optional voice file name (the .pth in the voice folder); empty uses the configured one."
+            "description": "Absolute path to the audio file to convert; give this or handle."
           },
           "handle": {
             "type": "string",
             "description": "A log:/mem: blob handle for the audio; give this or path."
+          },
+          "voice": {
+            "type": "string",
+            "description": "Optional voice file name (the .pth in the voice folder); empty uses the configured one."
           },
           "silent": {
             "type": "boolean",
@@ -115,7 +115,7 @@
     },
     {
       "name": "audio_sing",
-      "description": "Sing the given lyrics with the configured DiffSinger voicebank and play the song through the audio queue. Returns at once: synthesis runs in the background, the result lands in the speech records, and only a failure comes back as an audio.sing_failed event.",
+      "description": "Sing the given lyrics with the configured DiffSinger voicebank and play the song through the audio queue. Returns at once: synthesis runs in the background, the result lands in the speech records, and only a failure comes back as an audio.failed event.",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -144,7 +144,7 @@
     },
     {
       "name": "audio_transcribe",
-      "description": "Transcribe an audio file (a local path, or a log:/mem: blob handle) with the configured speech-to-text engine. Returns at once: transcription runs in the background, the text lands in the transcript records and comes back as an audio.transcribed event; a failure comes back as audio.transcribe_failed.",
+      "description": "Transcribe an audio file (a local path, or a log:/mem: blob handle) with the configured speech-to-text engine. Returns at once: transcription runs in the background, the text lands in the transcript records and comes back as an audio.transcribed event; a failure comes back as audio.failed.",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -169,7 +169,7 @@
     },
     {
       "name": "audio_listen",
-      "description": "Start, stop or inspect hearing: system audio, the microphone, or one application. Lanes split audio by voice activity and transcribe each chunk, or — when a lane is set to streaming — transcribe live and cut sentences by the engine endpoints. Transcribed sentences land in the transcript records (no audio files are kept). With delivery set to notify, each audio.heard is pushed with trigger=debounce, so the core batches close sentences into one wake-up (window and batch limits come from the framework batching settings).",
+      "description": "Start, stop or inspect hearing: system audio, the microphone, or one application. Lanes split audio by voice activity and transcribe each chunk, or — when a lane is set to streaming — transcribe live and cut sentences by the engine endpoints. Transcribed sentences land in the transcript records (no audio files are kept). With the delivery setting on notify, each audio.heard is pushed with trigger=debounce, so the core batches close sentences into one wake-up (window and batch limits come from the framework batching settings).",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -233,6 +233,214 @@
         "zh": "查看或改动播放队列。",
         "en": "Inspect or change the playback queue."
       }
+    },
+    {
+      "name": "audio_separate",
+      "description": "Separate a local song into vocals and accompaniment with the installed Demucs model. Returns a job id immediately; completion arrives as audio.separated with both file paths, failure as audio.failed. Setup is obtained by the user in Music > Separate.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Local audio file to separate."
+          }
+        },
+        "required": [
+          "path"
+        ]
+      },
+      "tags": [
+        "act"
+      ],
+      "summary": {
+        "zh": "把歌曲分成人声和伴奏。",
+        "en": "Separate a song into vocals and accompaniment."
+      }
+    },
+    {
+      "name": "audio_mix",
+      "description": "Mix 1–16 local audio tracks into a WAV with per-track volume and start delay. Returns a job id immediately; completion arrives as audio.mixed with the file path, failure as audio.failed. Does not play automatically.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tracks": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 16,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "volume": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 200,
+                  "description": "Volume percent; default 100."
+                },
+                "delaySec": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 3600,
+                  "description": "Start delay in seconds; default 0."
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          }
+        },
+        "required": [
+          "tracks"
+        ]
+      },
+      "tags": [
+        "act"
+      ],
+      "summary": {
+        "zh": "按音量和时间偏移混合多条音轨。",
+        "en": "Mix tracks with individual levels and start offsets."
+      }
+    },
+    {
+      "name": "audio_abc_music_score",
+      "description": "Validate, save or read ABC scores. Saved scores appear as sheet music in the Scores panel. Before editing, get the current score and save with expectedRevision. Audio rendering is separate. Validation and saving work without installed SoundFonts.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "check",
+              "save",
+              "get",
+              "list"
+            ]
+          },
+          "abc": {
+            "type": "string",
+            "maxLength": 48000,
+            "description": "One complete ABC tune with X/M/L/K headers; T/Q recommended. Use V: for independent voices and [CEG] for chords. Quoted chord names are labels and do not create accompaniment."
+          },
+          "id": {
+            "type": "string"
+          },
+          "expectedRevision": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 160
+          },
+          "instrument": {
+            "type": "string",
+            "description": "Preset ID from audio_abc_music_control action=instruments. Selects the SoundFont and default MIDI patch. Explicit ABC %%MIDI program overrides individual voices within that SoundFont."
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "tags": [
+        "act"
+      ],
+      "summary": {
+        "zh": "检查、保存与读取 ABC 曲谱和版本。",
+        "en": "Validate, save and read ABC scores."
+      }
+    },
+    {
+      "name": "audio_abc_music_play",
+      "description": "Render a WAV in the background using an installed SoundFont. Supply exactly one of score or abc. Direct ABC is saved after rendering succeeds. Works retain the ABC snapshot and MIDI. return attaches audio to the tool receipt; event emits audio.abc_played. Playback and sending use other tools. Ask the user to obtain or import a SoundFont in Instruments when none is installed.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "score": {
+            "type": "string",
+            "description": "Saved score ID."
+          },
+          "abc": {
+            "type": "string",
+            "maxLength": 48000,
+            "description": "One complete ABC tune with X/M/L/K headers; T/Q recommended. Use V: for independent voices and [CEG] for chords. Quoted chord names are labels and do not create accompaniment."
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 160
+          },
+          "instrument": {
+            "type": "string",
+            "description": "Preset ID from audio_abc_music_control action=instruments. Selects the SoundFont and default MIDI patch. Explicit ABC %%MIDI program overrides individual voices within that SoundFont."
+          },
+          "delivery": {
+            "type": "string",
+            "enum": [
+              "return",
+              "event"
+            ]
+          }
+        }
+      },
+      "tags": [
+        "act"
+      ],
+      "summary": {
+        "zh": "把 ABC 曲谱渲染为采样音源 WAV，并保存作品。",
+        "en": "Render ABC to sampled audio and retain a score snapshot."
+      }
+    },
+    {
+      "name": "audio_abc_music_control",
+      "description": "Read ABC Music status, list installed SoundFont presets, or set the default instrument and audio delivery. Use instruments before choosing a preset ID. SoundFonts are obtained or imported by the user in the Instruments panel.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "status",
+              "instruments",
+              "set"
+            ]
+          },
+          "instrument": {
+            "type": "string",
+            "description": "Preset ID from audio_abc_music_control action=instruments. Selects the SoundFont and default MIDI patch. Explicit ABC %%MIDI program overrides individual voices within that SoundFont."
+          },
+          "delivery": {
+            "type": "string",
+            "enum": [
+              "return",
+              "event"
+            ]
+          },
+          "eventDelivery": {
+            "type": "string",
+            "enum": [
+              "archive",
+              "model"
+            ]
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "tags": [
+        "act"
+      ],
+      "summary": {
+        "zh": "列出音源预设、查看状态或设置乐器与交付方式。",
+        "en": "List SoundFont presets, read status or configure instruments and delivery."
+      }
     }
   ],
   "events": [
@@ -244,27 +452,6 @@
       }
     },
     {
-      "type": "audio.say_failed",
-      "description": {
-        "zh": "后台合成一句话失败了；成功不打扰。",
-        "en": "A background audio_say synthesis failed; successes stay silent."
-      }
-    },
-    {
-      "type": "audio.convert_failed",
-      "description": {
-        "zh": "后台变声失败了；成功不打扰。",
-        "en": "A background audio_convert conversion failed; successes stay silent."
-      }
-    },
-    {
-      "type": "audio.sing_failed",
-      "description": {
-        "zh": "后台唱歌失败了；成功不打扰。",
-        "en": "A background audio_sing synthesis failed; successes stay silent."
-      }
-    },
-    {
       "type": "audio.say_done",
       "description": {
         "zh": "silent 合成完成，带回本地路径与音频附件句柄。",
@@ -272,17 +459,17 @@
       }
     },
     {
+      "type": "audio.failed",
+      "description": {
+        "zh": "后台说话、转写、变声、唱歌、分离或混音失败，正文包含工具名、任务编号与失败原因。",
+        "en": "A background speech, transcription, conversion, singing, separation, or mixing task failed; the text includes the tool name, job id, and error."
+      }
+    },
+    {
       "type": "audio.transcribed",
       "description": {
         "zh": "后台转写完成，带回文字。",
         "en": "A background transcription finished; it carries the text."
-      }
-    },
-    {
-      "type": "audio.transcribe_failed",
-      "description": {
-        "zh": "后台转写失败。",
-        "en": "A background transcription failed."
       }
     },
     {
@@ -298,6 +485,28 @@
         "zh": "silent 唱歌完成，带回本地路径与音频附件句柄。",
         "en": "A silent audio_sing finished; it carries the local path and the audio as a blob attachment."
       }
+    },
+    {
+      "type": "audio.separated",
+      "description": {
+        "zh": "歌曲分离完成，带回人声与伴奏路径。",
+        "en": "Song separation finished with paths to vocals and accompaniment."
+      }
+    },
+    {
+      "type": "audio.mixed",
+      "description": {
+        "zh": "混音完成，带回 WAV 路径。",
+        "en": "Mixing finished with the WAV file path."
+      }
+    },
+    {
+      "type": "audio.abc_played",
+      "description": {
+        "zh": "ABC 演奏完成：WAV 附件、曲谱版本与文件路径。",
+        "en": "ABC rendering completed, with a WAV attachment and score revision."
+      },
+      "trigger": "debounce"
     }
   ],
   "prompts": [

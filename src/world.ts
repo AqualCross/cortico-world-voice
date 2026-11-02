@@ -9,8 +9,13 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import type { ToolDef, World, WorldWebUiDecl, WorldHost, WorldStreamSocket } from 'cortico/core/types.ts';
 import { nowIso } from 'cortico/core/util.ts';
-import { RVC_PACKAGES, SING_PACKAGES, TORCH_SOURCE, WINDOWS_PREBUILT } from './catalog.ts';
-import { AUDIO_CONFIG_GROUP, type AudioConfigSection } from './config.ts';
+import { RVC_PACKAGES, SING_PACKAGES, SINGER_VOICEBANK_NAME, TORCH_SOURCE, WINDOWS_PREBUILT } from './catalog.ts';
+import { AUDIO_CONFIG_GROUP, AUDIO_DEFAULTS, type AudioConfigSection } from './config.ts';
+import { AbcMusicWorld, TOOLS as ABC_TOOLS } from './music-abc/world.js';
+import { DemucsJob, DEMUCS_SCRIPT, type DemucsStages } from './music-demucs.ts';
+import { MusicProcessor, type MusicTask } from './music-process.ts';
+import { runMusicCommand } from './music-command.ts';
+import { convertLongAudio } from './rvc-long.ts';
 import { FIRERED_VAD_FILES, PARAFORMER_FILES, SENSEVOICE_FILES, TIER_SPECS } from './catalog.ts';
 import { synthesizeCloud } from './cloud.ts';
 import { GptSovitsService, gptSovitsMissing, type GptSovitsSetup } from './gpt-sovits.ts';
@@ -33,14 +38,14 @@ import { ListenEngine, type HeardChunk } from './listen.ts';
 import { sileroModelUsable } from './vad.ts';
 import { paraformerReady } from './stream-asr.ts';
 import { FIRERED_AED_FILE, FireRedAedClassifier, aedReady } from './firered-aed.ts';
-import { FIRERED_CMVN_FILE } from './firered.ts';
+import { FIRERED_CMVN_FILE, onnxRuntimeStatus } from './firered.ts';
 import { detectGpu, type GpuReport, type Tier } from './gpu.ts';
-import { weightsDir, GptSovitsProjectJob, GptSovitsWeightsJob, ModelFilesJob, ProjectEnvJob, RvcAssetsJob, RvcProjectJob, SingerModelsJob, STT_PACKAGES, UvPackagesJob, VadJob, asrEnvDir, fireRedModelDir, isRvcProjectDir, rvcAssetsDir, rvcProjectDir, singEnvDir, singerDir, sttDir, vadDir, type InstallRoots } from './install.ts';
+import { weightsDir, GptSovitsProjectJob, GptSovitsWeightsJob, ModelFilesJob, ProjectEnvJob, RvcAssetsJob, RvcProjectJob, SingerModelsJob, STT_CHECK, STT_PACKAGES, UvPackagesJob, VadJob, asrEnvDir, fireRedModelDir, isRvcProjectDir, rvcAssetsDir, rvcProjectDir, singEnvDir, singerDir, sttDir, vadDir, type InstallRoots } from './install.ts';
 import { Job, type JobState } from './jobs.ts';
 import { decodeMono16k } from './decode.ts';
 import { LocalAsr } from './local-asr.ts';
 import { parsedFromFields, senseVoiceNote } from './sensevoice-tags.ts';
-import { envPython, projectPython } from './project-env.ts';
+import { envPython, killProcessesUnder, projectPython } from './project-env.ts';
 import { detectFfmpeg, installFfmpeg, probeFfmpeg, type FfmpegInfo } from './ffmpeg.ts';
 import { PcmOutput, loadAudify } from './audio-out.ts';
 import { playFile, playFileStream } from './play.ts';
@@ -102,6 +107,17 @@ export function uvDir(dataDir: string): string {
   return audioPath(dataDir, 'uv');
 }
 
+/** 删掉依赖的目录或文件；Windows 上被占用时给人话，别把 errno 原样抛给面板。 */
+function removeDependencyPath(path: string): void {
+  if (!existsSync(path)) return;
+  try {
+    rmSync(path, { recursive: true, force: true, maxRetries: 4, retryDelay: 250 });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code ?? '未知错误';
+    throw new Error(`删不掉 ${basename(path)}（${code}）：先停止正在使用它的播放、监听或任务，再试一次。`);
+  }
+}
+
 /** 依赖页的一份快照。 */
 export interface DepsState {
   gpu: GpuReport;
@@ -118,13 +134,29 @@ export interface DepsState {
     assets: JobState & { dir: string; bytes: number };
   };
   singer: { models: JobState & { dir: string } };
+  demucs: DemucsStages;
   vad: {
     silero: JobState & { dir: string };
     firered: JobState & { dir: string; bytes: number };
+    /** FireRed 用的 onnxruntime-node（扩展依赖）能不能加载；模型装了它也不一定在。 */
+    runtime: { ok: boolean; detail: string | null };
   };
   stt: {
     sensevoice: JobState & { dir: string; bytes: number };
     paraformer: JobState & { dir: string; bytes: number };
+  };
+  /** 各行的磁盘上有没有本扩展装的产物；只有这里为真才给「卸载」。 */
+  installed: {
+    uv: boolean;
+    ffmpeg: boolean;
+    gpt: boolean;
+    rvc: boolean;
+    singer: boolean;
+    demucs: boolean;
+    silero: boolean;
+    firered: boolean;
+    sensevoice: boolean;
+    paraformer: boolean;
   };
 }
 
@@ -184,7 +216,7 @@ export const AUDIO_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'audio_say',
-    description: 'Say a line with the configured speech engine and play it through the audio queue. Returns at once: synthesis and playback run in the background, and only a failure comes back as an audio.say_failed event. With silent=true it synthesizes in the background without playback and the file path comes back as an audio.say_done event.',
+    description: 'Say a line with the configured speech engine and play it through the audio queue. Returns at once: synthesis and playback run in the background, and only a failure comes back as an audio.failed event. With silent=true it synthesizes in the background without playback and the file path comes back as an audio.say_done event.',
     tags: ['speak'],
     parameters: {
       type: 'object',
@@ -199,7 +231,7 @@ export const AUDIO_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'audio_convert',
-    description: 'Convert an audio file (a local path, or a log:/mem: blob handle) into the configured RVC voice and play the result through the audio queue. Returns at once: conversion runs in the background, the result lands in the speech records, and only a failure comes back as an audio.convert_failed event.',
+    description: 'Convert an audio file (a local path, or a log:/mem: blob handle) into the configured RVC voice and play the result through the audio queue. Returns at once: conversion runs in the background, the result lands in the speech records, and only a failure comes back as an audio.failed event.',
     tags: ['speak'],
     parameters: {
       type: 'object',
@@ -214,7 +246,7 @@ export const AUDIO_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'audio_sing',
-    description: 'Sing the given lyrics with the configured DiffSinger voicebank and play the song through the audio queue. Returns at once: synthesis runs in the background, the result lands in the speech records, and only a failure comes back as an audio.sing_failed event.',
+    description: 'Sing the given lyrics with the configured DiffSinger voicebank and play the song through the audio queue. Returns at once: synthesis runs in the background, the result lands in the speech records, and only a failure comes back as an audio.failed event.',
     tags: ['speak'],
     parameters: {
       type: 'object',
@@ -228,7 +260,7 @@ export const AUDIO_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
   },
   {
     name: 'audio_transcribe',
-    description: 'Transcribe an audio file (a local path, or a log:/mem: blob handle) with the configured speech-to-text engine. Returns at once: transcription runs in the background, the text lands in the transcript records and comes back as an audio.transcribed event; a failure comes back as audio.transcribe_failed.',
+    description: 'Transcribe an audio file (a local path, or a log:/mem: blob handle) with the configured speech-to-text engine. Returns at once: transcription runs in the background, the text lands in the transcript records and comes back as an audio.transcribed event; a failure comes back as audio.failed.',
     tags: ['read'],
     parameters: {
       type: 'object',
@@ -267,6 +299,25 @@ export const AUDIO_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
       required: ['act'],
     },
   },
+  {
+    name: 'audio_separate',
+    description: 'Separate a local song into vocals and accompaniment with the installed Demucs model. Returns a job id immediately; completion arrives as audio.separated with both file paths, failure as audio.failed. Setup is obtained by the user in Music > Separate.',
+    tags: ['act'],
+    parameters: { type: 'object', additionalProperties: false, properties: { path: { type: 'string', description: 'Local audio file to separate.' } }, required: ['path'] },
+  },
+  {
+    name: 'audio_mix',
+    description: 'Mix 1–16 local audio tracks into a WAV with per-track volume and start delay. Returns a job id immediately; completion arrives as audio.mixed with the file path, failure as audio.failed. Does not play automatically.',
+    tags: ['act'],
+    parameters: {
+      type: 'object', additionalProperties: false,
+      properties: { tracks: { type: 'array', minItems: 1, maxItems: 16, items: {
+        type: 'object', additionalProperties: false,
+        properties: { path: { type: 'string' }, volume: { type: 'number', minimum: 0, maximum: 200, description: 'Volume percent; default 100.' }, delaySec: { type: 'number', minimum: 0, maximum: 3600, description: 'Start delay in seconds; default 0.' } }, required: ['path'],
+      } } }, required: ['tracks'],
+    },
+  },
+  ...ABC_TOOLS,
 ];
 
 /** 按名字取工具声明；工具顺序变了不用跟着改下标。 */
@@ -277,7 +328,7 @@ function decl(name: string): Omit<ToolDef, 'handler'> {
 }
 
 /** 工具页卡片上一句话，按语言取。 */
-const TOOL_SUMMARIES: Readonly<Record<string, { zh: string; en: string }>> = {
+export const TOOL_SUMMARIES: Readonly<Record<string, { zh: string; en: string }>> = {
   audio_status: { zh: '报告语音能力此刻的接入状态。', en: 'Reports which audio capabilities are wired up right now.' },
   audio_listen: { zh: '开始、停止或查看本机声音监听。', en: 'Starts, stops or inspects hearing.' },
   audio_play: { zh: '播放一个音频文件，后面的排队。', en: 'Plays an audio file; later requests queue up.' },
@@ -286,6 +337,11 @@ const TOOL_SUMMARIES: Readonly<Record<string, { zh: string; en: string }>> = {
   audio_sing: { zh: '用 DiffSinger 把歌词唱出来并播放。', en: 'Sings lyrics with DiffSinger and plays the song.' },
   audio_transcribe: { zh: '转写一个音频文件，完成后以事件带回文字。', en: 'Transcribes an audio file in the background; the text arrives as an event.' },
   audio_queue: { zh: '查看或改动播放队列。', en: 'Inspect or change the playback queue.' },
+  audio_separate: { zh: '把歌曲分成人声和伴奏。', en: 'Separate a song into vocals and accompaniment.' },
+  audio_mix: { zh: '按音量和时间偏移混合多条音轨。', en: 'Mix tracks with individual levels and start offsets.' },
+  audio_abc_music_score: { zh: '检查、保存与读取 ABC 曲谱和版本。', en: 'Validate, save and read ABC scores.' },
+  audio_abc_music_play: { zh: '把 ABC 曲谱渲染为采样音源 WAV，并保存作品。', en: 'Render ABC to sampled audio and retain a score snapshot.' },
+  audio_abc_music_control: { zh: '列出音源预设、查看状态或设置乐器与交付方式。', en: 'List SoundFont presets, read status or configure instruments and delivery.' },
 };
 
 /** uv 的安装任务；识别到本机已有 uv 时 present() 直接为真。 */
@@ -344,6 +400,9 @@ export class AudioWorld implements World {
   private readonly uvJob: UvJob;
   private readonly ffmpegJob: FfmpegJob;
   private readonly toolText: ToolTextStore;
+  private readonly abc: AbcMusicWorld;
+  private readonly demucs: DemucsJob;
+  private readonly music: MusicProcessor;
   private readonly transcripts: TranscriptsStore;
   private readonly clips: ClipsStore;
   private readonly lanesFile: string;
@@ -394,9 +453,36 @@ export class AudioWorld implements World {
   private gpuCache: { at: number; report: GpuReport } | null = null;
   private uvCache: { at: number; info: UvInfo } | null = null;
   private ffmpegCache: { at: number; info: FfmpegInfo } | null = null;
+  /** 正在跑的「获取」链数量；链的步骤之间没有 busy 的任务，卸载要靠它挡住。 */
+  private preparing = 0;
 
   constructor(private readonly opts: AudioWorldOptions) {
     this.roots = { runtimesRoot: opts.runtimesRoot, modelsRoot: opts.modelsRoot };
+    opts.cfg.music ??= structuredClone(AUDIO_DEFAULTS.music);
+    this.abc = new AbcMusicWorld({
+      cfg: opts.cfg.music.abc,
+      dataDir: opts.dataDir,
+      storageDir: audioPath(opts.dataDir, 'music', 'abc'),
+      worldId: this.id,
+      botDir: opts.botDir,
+      packageDir: opts.packageDir,
+      persist: (abc) => opts.persist({ music: { abc } }),
+    });
+    this.demucs = new DemucsJob(this.roots, async () => (await this.uvInfo()).path ?? '', () => this.detectedTier());
+    this.music = new MusicProcessor({
+      dir: audioPath(opts.dataDir, 'music'),
+      ffmpeg: async () => {
+        const path = (await this.ffmpegInfo()).path;
+        if (!path) throw new Error('先在「依赖」页获取 ffmpeg。');
+        return path;
+      },
+      separator: () => {
+        if (this.demucs.status().phase !== 'ready') throw new Error('先在「依赖」页获取 Demucs 分离模型。');
+        return { command: this.demucs.python(), args: [DEMUCS_SCRIPT, '--code', this.demucs.codeDir(), '--models', this.demucs.modelsDir(), '--device', this.detectedTier()] };
+      },
+      complete: (task) => this.shipMusic(task),
+      failed: (task) => this.shipMusic(task),
+    });
     this.project = new GptSovitsProjectJob(this.roots);
     this.weights = new GptSovitsWeightsJob(this.roots, () => this.tier());
     this.rvcProject = new RvcProjectJob(this.roots);
@@ -410,7 +496,7 @@ export class AudioWorld implements World {
       torch: () => TORCH_SOURCE[this.tier()],
       preinstall: () => WINDOWS_PREBUILT,
     });
-    this.singEnvJob = new UvPackagesJob(() => singEnvDir(this.roots), async () => (await this.uvInfo()).path ?? '', SING_PACKAGES);
+    this.singEnvJob = new UvPackagesJob(() => singEnvDir(this.roots), async () => (await this.uvInfo()).path ?? '', SING_PACKAGES, 'import diffsinger_utau, numpy;print(diffsinger_utau.__version__)');
     this.rvcEnvJob = new ProjectEnvJob({
       dir: () => this.rvcProject.dir(),
       uv: async () => (await this.uvInfo()).path ?? '',
@@ -419,14 +505,16 @@ export class AudioWorld implements World {
     });
     this.sensevoiceJob = new ModelFilesJob(() => sttDir(this.roots, 'sensevoice'), () => SENSEVOICE_FILES);
     this.paraformerJob = new ModelFilesJob(() => sttDir(this.roots, 'paraformer'), () => PARAFORMER_FILES);
-    this.sensevoiceEnvJob = new UvPackagesJob(() => asrEnvDir(this.roots), async () => (await this.uvInfo()).path ?? '', STT_PACKAGES);
+    this.sensevoiceEnvJob = new UvPackagesJob(() => asrEnvDir(this.roots), async () => (await this.uvInfo()).path ?? '', STT_PACKAGES, STT_CHECK);
     this.uvJob = new UvJob(() => uvDir(this.opts.dataDir), () => this.uvInfo());
     this.ffmpegJob = new FfmpegJob(() => audioPath(this.opts.dataDir, 'ffmpeg'), () => this.ffmpegInfo());
     this.queue = new PlayQueue((o) => this.playAny(o), () => this.opts.cfg.volume, {
       onStart: (item) => this.subtitle.show(item.text, item.seconds, this.subtitleStyle()),
       onEnd: () => this.subtitle.hide(),
     });
-    this.toolText = new ToolTextStore(AUDIO_TOOL_DECLS, { botDir: opts.botDir, packageDir: opts.packageDir, id: this.id });
+    this.toolText = new ToolTextStore(AUDIO_TOOL_DECLS, {
+      botDir: opts.botDir, packageDir: opts.packageDir, id: this.id, defaultDisabledTools: ['audio_listen'],
+    });
     // 记录里的时间统一写本地墙钟串（带偏移），面板按位置切片就能直接显示。
     const clock = (): string => nowIso(opts.timezone);
     this.transcripts = new TranscriptsStore(audioPath(opts.dataDir, 'transcripts'), 200, clock);
@@ -526,8 +614,18 @@ export class AudioWorld implements World {
       this.transcribeTool().handler!,
       this.listenTool().handler!,
       this.queueTool().handler!,
+      async (args) => {
+        try { const task = this.music.separate(args.path, 'tool'); return `已开始分离 ${task.id}；完成后以 audio.separated 带回人声和伴奏路径。`; }
+        catch (error) { return `[audio_separate 没执行] ${error instanceof Error ? error.message : String(error)}`; }
+      },
+      async (args) => {
+        try { const task = this.music.mix(args.tracks, 'tool'); return `已开始混音 ${task.id}；完成后以 audio.mixed 带回文件路径。`; }
+        catch (error) { return `[audio_mix 没执行] ${error instanceof Error ? error.message : String(error)}`; }
+      },
+      ...this.abc.tools().map((tool) => tool.handler),
     ];
-    return this.toolText.resolve().map((tool, index) => ({ ...tool, handler: handlers[index] }));
+    const byName = new Map(AUDIO_TOOL_DECLS.map((tool, index) => [tool.name, handlers[index]]));
+    return this.toolText.resolve().map((tool) => ({ ...tool, handler: byName.get(tool.name)! }));
   }
 
   /** 导航上的状态灯：四项能力各自可确认的状态 + 「在听 N 路」徽章；不做技术细节展示。 */
@@ -576,6 +674,12 @@ export class AudioWorld implements World {
           getMethods: ['state'],
         },
         {
+          id: 'music',
+          title: en ? 'Music' : '音乐',
+          description: en ? 'Separate vocals, mix tracks, and compose with ABC notation.' : '人声分离、多轨混音与 ABC 乐谱创作。',
+          getMethods: ['state'],
+        },
+        {
           id: 'tools',
           title: '工具',
           getMethods: ['list'],
@@ -612,12 +716,16 @@ export class AudioWorld implements World {
     }
     // 挂载时先探一次显卡：档位与权重都按它解析，别等第一次说话才发现还没检测过。
     void this.gpu();
+    await this.abc.start(host);
     this.hearing.start();
   }
 
   async stop(): Promise<void> {
     this.speakGen += 1;
     this.speakJobs.length = 0;
+    this.demucs.cancel();
+    await this.music.stop();
+    await this.abc.stop();
     this.hearing.dispose();
     this.stopLevelPush();
     this.host = null;
@@ -655,6 +763,22 @@ export class AudioWorld implements World {
 
   /** 面板与工具共用的数据面。 */
   async invoke(panel: string, method: string, args: unknown[] = []): Promise<unknown> {
+    if (panel === 'music') {
+      if (method === 'state') return this.musicState();
+      if (method === 'prepareSeparator') { await this.gpu(); void this.prepare([this.demucs]); return this.musicState(); }
+      if (method === 'cancelSetup') { this.demucs.cancel(); return this.musicState(); }
+      if (method === 'separate') { this.music.separate(args[0], 'ui'); return this.musicState(); }
+      if (method === 'mix') { this.music.mix(args[0], 'ui'); return this.musicState(); }
+      if (method === 'cancel') { this.music.cancel(String(args[0])); return this.musicState(); }
+      if (method === 'remove') { this.music.remove(String(args[0])); return this.musicState(); }
+      if (method === 'file') return this.music.file(String(args[0]), Number(args[1] ?? 0));
+      if (method === 'abc') {
+        const [abcPanel, abcMethod, abcArgs = []] = args;
+        if (!['scores', 'works', 'instruments'].includes(String(abcPanel)) || !Array.isArray(abcArgs)) throw new Error('未知 ABC 面板。');
+        return this.abc.invoke(String(abcPanel), String(abcMethod), abcArgs);
+      }
+      throw new Error(`未知音乐方法：${method}`);
+    }
     // 三个面板的控件都走这里写配置，和框架的配置页是同一份值。
     if (method === 'setConfigValue') return this.saveConfigValue(String(args[0] ?? ''), args[1]);
     if (panel === 'speak') {
@@ -813,7 +937,7 @@ export class AudioWorld implements World {
     if (panel === 'records') return this.recordsInvoke(method, args);
     if (panel === 'tools') {
       if (method === 'list') return this.toolTextView(this.toolText.read());
-      if (method === 'save') return this.toolTextView(this.toolText.save(args[0] as { expectedRevision: string; overrides: unknown }));
+      if (method === 'save') return this.toolTextView(this.toolText.save(args[0] as Parameters<ToolTextStore['save']>[0]));
       if (method === 'reset') return this.toolTextView(this.toolText.reset(args[0] as { expectedRevision: string }));
       throw new Error(`未知方法 tools/${method}`);
     }
@@ -824,6 +948,9 @@ export class AudioWorld implements World {
     }
     switch (method) {
       case 'state':
+        return this.depsState();
+      case 'uninstall':
+        await this.uninstallDependency(String(args[0] ?? ''));
         return this.depsState();
       case 'installUv':
         void this.uvJob.install();
@@ -839,6 +966,9 @@ export class AudioWorld implements World {
         return this.depsState();
       case 'prepareSinger':
         void this.prepare([this.singerModels, this.singEnvJob]);
+        return this.depsState();
+      case 'prepareSeparator':
+        void this.prepare([this.demucs]);
         return this.depsState();
       case 'prepareSilero':
         void this.prepare([this.vadJob]);
@@ -860,6 +990,7 @@ export class AudioWorld implements World {
         this.rvcProject.cancel();
         this.rvcAssets.cancel();
         this.singerModels.cancel();
+        this.demucs.cancel();
         this.vadJob.cancel();
         this.fireredModels.cancel();
         this.gptEnvJob.cancel();
@@ -897,22 +1028,136 @@ export class AudioWorld implements World {
         assets: { ...this.rvcAssets.status(), dir: rvcAssetsDir(this.roots), bytes: this.rvcAssets.bytes() },
       },
       singer: { models: { ...this.singerModels.status(), dir: singerDir(this.roots) } },
+      demucs: this.demucs.stages(),
       vad: {
         silero: { ...this.vadJob.status(), dir: vadDir(this.roots) },
         firered: { ...this.fireredModels.status(), dir: fireRedModelDir(this.roots), bytes: this.fireredModels.bytes() },
+        runtime: onnxRuntimeStatus(),
       },
       stt: {
         sensevoice: { ...this.sensevoiceJob.status(), dir: sttDir(this.roots, 'sensevoice'), bytes: this.sensevoiceJob.bytes() },
         paraformer: { ...this.paraformerJob.status(), dir: sttDir(this.roots, 'paraformer'), bytes: this.paraformerJob.bytes() },
       },
+      installed: {
+        uv: existsSync(join(uvDir(this.opts.dataDir), 'uv.exe')),
+        ffmpeg: existsSync(join(audioPath(this.opts.dataDir, 'ffmpeg'), 'ffmpeg.exe')),
+        gpt: existsSync(this.project.dir()) || existsSync(weightsDir(this.roots)),
+        rvc: existsSync(rvcProjectDir(this.roots)) || existsSync(rvcAssetsDir(this.roots)),
+        singer: existsSync(join(singerDir(this.roots), SINGER_VOICEBANK_NAME)) || existsSync(singEnvDir(this.roots)),
+        demucs: existsSync(this.demucs.dir()) || existsSync(this.demucs.modelsDir()),
+        silero: existsSync(join(vadDir(this.roots), 'silero_vad.onnx')),
+        firered: existsSync(fireRedModelDir(this.roots)),
+        // 识别环境两份模型共用：只剩环境没有模型时，算在 SenseVoice 那行，免得没法清掉。
+        sensevoice: existsSync(sttDir(this.roots, 'sensevoice'))
+          || (!existsSync(sttDir(this.roots, 'paraformer')) && existsSync(asrEnvDir(this.roots))),
+        paraformer: existsSync(sttDir(this.roots, 'paraformer')),
+      },
     };
+  }
+
+  /** 有安装任务在跑时不允许卸载：文件正被 uv / python 占着，删到一半最难受。 */
+  private jobsBusy(): boolean {
+    if (this.preparing > 0) return true;
+    return [this.uvJob, this.ffmpegJob, this.project, this.weights, this.gptEnvJob,
+      this.rvcProject, this.rvcEnvJob, this.rvcAssets, this.singerModels, this.singEnvJob,
+      this.demucs.source, this.demucs.environment, this.demucs.weights,
+      this.vadJob, this.fireredModels, this.sensevoiceJob, this.sensevoiceEnvJob, this.paraformerJob,
+    ].some((job) => job.busy());
+  }
+
+  /** 卸载依赖页的一行：先停掉占用文件的服务，再删本扩展装的那几处；确认在面板里做。 */
+  private async uninstallDependency(id: string): Promise<void> {
+    if (this.jobsBusy()) throw new Error('有依赖正在获取，先取消进行中的任务。');
+    if (this.music.list().some((task) => task.phase === 'working')) throw new Error('音乐任务进行中，先在音乐页取消或等它完成。');
+    switch (id) {
+      case 'uv':
+        removeDependencyPath(uvDir(this.opts.dataDir));
+        this.uvJob.reset();
+        this.uvCache = null;
+        return;
+      case 'ffmpeg':
+        removeDependencyPath(audioPath(this.opts.dataDir, 'ffmpeg'));
+        this.ffmpegJob.reset();
+        this.ffmpegCache = null;
+        return;
+      case 'gpt':
+        await this.sovits?.stop();
+        this.sovits = null;
+        this.sovitsKey = '';
+        await killProcessesUnder(this.project.dir(), ['python.exe', 'uv.exe']);
+        removeDependencyPath(this.project.dir());
+        removeDependencyPath(weightsDir(this.roots));
+        this.project.reset();
+        this.gptEnvJob.reset();
+        this.weights.reset();
+        return;
+      case 'rvc':
+        this.rvcCache?.engine.dispose();
+        this.rvcCache = null;
+        await killProcessesUnder(this.rvcProject.dir(), ['python.exe', 'uv.exe']);
+        removeDependencyPath(this.rvcProject.dir());
+        removeDependencyPath(rvcAssetsDir(this.roots));
+        this.rvcProject.reset();
+        this.rvcEnvJob.reset();
+        this.rvcAssets.reset();
+        return;
+      case 'singer':
+        this.singCache?.engine.dispose();
+        this.singCache = null;
+        await killProcessesUnder(singEnvDir(this.roots), ['python.exe', 'uv.exe']);
+        // 只删安装的那套声库，用户自己放进来的声库保留。
+        removeDependencyPath(join(singerDir(this.roots), SINGER_VOICEBANK_NAME));
+        removeDependencyPath(singEnvDir(this.roots));
+        this.singerModels.reset();
+        this.singEnvJob.reset();
+        return;
+      case 'demucs':
+        await killProcessesUnder(this.demucs.dir(), ['python.exe', 'uv.exe']);
+        removeDependencyPath(this.demucs.dir());
+        removeDependencyPath(this.demucs.modelsDir());
+        this.demucs.source.reset();
+        this.demucs.environment.reset();
+        this.demucs.weights.reset();
+        return;
+      case 'silero':
+        removeDependencyPath(join(vadDir(this.roots), 'silero_vad.onnx'));
+        this.vadJob.reset();
+        return;
+      case 'firered':
+        this.aed = null;
+        removeDependencyPath(fireRedModelDir(this.roots));
+        this.fireredModels.reset();
+        return;
+      case 'sensevoice':
+      case 'paraformer': {
+        this.asr?.client.dispose();
+        this.asr = null;
+        removeDependencyPath(sttDir(this.roots, id));
+        (id === 'sensevoice' ? this.sensevoiceJob : this.paraformerJob).reset();
+        // 识别环境两份模型共用；另一份还在就留着。
+        if (!existsSync(sttDir(this.roots, id === 'sensevoice' ? 'paraformer' : 'sensevoice'))) {
+          await killProcessesUnder(asrEnvDir(this.roots), ['python.exe', 'uv.exe']);
+          removeDependencyPath(asrEnvDir(this.roots));
+          this.sensevoiceEnvJob.reset();
+        }
+        return;
+      }
+      default:
+        throw new Error(`未知依赖 ${id}`);
+    }
   }
 
   /** 一件「获取」：按顺序跑，已就绪的跳过，失败就停在那里，下次接着来。 */
   private async prepare(steps: Array<{ status(): JobState; install(): Promise<void> }>): Promise<void> {
     // 权重档位要靠显卡检测结果，先确保检测跑过。
     await this.gpu();
-    await runChain(steps);
+    // 各步之间有一瞬没有 busy 的任务；用这个计数挡住中途卸载。
+    this.preparing += 1;
+    try {
+      await runChain(steps);
+    } finally {
+      this.preparing -= 1;
+    }
   }
 
   /** 本机服务从项目目录里的 .venv 起进程；不停掉就替换目录或重建环境，会卡在被占用的文件上。 */
@@ -927,6 +1172,11 @@ export class AudioWorld implements World {
     if (choice === 'cpu') return 'cpu';
     // 明确点了某张卡就是要用显卡；别因为检测缓存没热就悄悄退回 CPU。
     if (choice !== 'auto') return 'cuda';
+    return this.gpuCache?.report?.tier ?? 'cpu';
+  }
+
+  /** 只看显卡检测结果，不受说话页档位覆盖影响：分离是批处理，环境与推理都按它走。 */
+  detectedTier(): Tier {
     return this.gpuCache?.report?.tier ?? 'cpu';
   }
 
@@ -963,6 +1213,8 @@ export class AudioWorld implements World {
     const model = join(vadDir(this.roots), 'silero_vad.onnx');
     const streamDir = sttDir(this.roots, 'paraformer');
     const fireDir = fireRedModelDir(this.roots);
+    const aedModel = aedReady(fireDir);
+    const ort = onnxRuntimeStatus();
     return {
       listen: cfg.listen,
       stt: cfg.stt,
@@ -977,7 +1229,7 @@ export class AudioWorld implements World {
         paused: this.hearing.isPaused,
         lanes: this.hearing.views(),
         silero: { path: model, exists: sileroModelUsable(model) },
-        aed: { ready: aedReady(fireDir) },
+        aed: { ready: aedModel && ort.ok, model: aedModel, runtime: ort.ok, detail: ort.detail },
         stream: { engine: 'paraformer', dir: streamDir, ready: paraformerReady(streamDir) },
       },
     };
@@ -1178,6 +1430,7 @@ export class AudioWorld implements World {
 
   /** 听页的电平通道：连接期间 100ms 推一帧，断开就停。 */
   private streamPanel(panel: string, socket: WorldStreamSocket): void {
+    if (panel === 'music') { this.abc.stream('scores', socket); return; }
     if (panel !== 'listen') {
       socket.close('unknown panel');
       return;
@@ -1436,18 +1689,25 @@ export class AudioWorld implements World {
     if (!this.rvcVoices.list().includes(`${wanted}.pth`)) throw new Error(`音色不在了：${wanted}.pth（在变声页重新导入）`);
     const missing = this.rvcMissing();
     if (missing.length) throw new Error(`还缺：${missing.join('、')}。去「依赖」页对 RVC 点「获取」。`);
-    if (!(await this.ffmpegInfo()).path) throw new Error('变声要用 ffmpeg 解码音频：先在「依赖」页获取 ffmpeg。');
+    const ffmpeg = (await this.ffmpegInfo()).path;
+    if (!ffmpeg) throw new Error('变声要用 ffmpeg 解码音频：先在「依赖」页获取 ffmpeg。');
     const cfg = this.opts.cfg;
     const engine = await this.rvcEngine();
-    const out = this.scratch(`cv${Date.now()}-${++this.convertSeq}.wav`);
+    const stamp = `${Date.now()}-${++this.convertSeq}`;
+    const out = this.scratch(`cv${stamp}.wav`);
     try {
-      const result = await engine.convert({
-        input: source,
-        output: out,
-        model: this.rvcVoices.pathOf(`${wanted}.pth`),
-        pitch: cfg.convert.pitch,
-        indexRate: cfg.convert.indexRate,
-        protect: cfg.convert.protect,
+      const result = await convertLongAudio(source, out, {
+        ffmpeg: (args, timeoutMs) => runMusicCommand(ffmpeg, args, { signal: AbortSignal.timeout(timeoutMs) }),
+        convert: async (chunkIn, chunkOut) => (await engine.convert({
+          input: chunkIn,
+          output: chunkOut,
+          model: this.rvcVoices.pathOf(`${wanted}.pth`),
+          pitch: cfg.convert.pitch,
+          indexRate: cfg.convert.indexRate,
+          protect: cfg.convert.protect,
+        })).ms,
+        scratch: (name) => this.scratch(`cv${stamp}-${name}`),
+        remove: (path) => rmSync(path, { force: true }),
       });
       return { bytes: readFileSync(out), voice: wanted, source, ms: result.ms };
     } finally {
@@ -1463,7 +1723,7 @@ export class AudioWorld implements World {
     void next.catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
       void this.host?.pushEvent({
-        type: 'audio.convert_failed',
+        type: 'audio.failed',
         ts: nowIso(this.opts.timezone),
         source: this.id,
         origin: 'external',
@@ -1610,7 +1870,7 @@ export class AudioWorld implements World {
     void next.catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
       void this.host?.pushEvent({
-        type: 'audio.sing_failed',
+        type: 'audio.failed',
         ts: nowIso(this.opts.timezone),
         source: this.id,
         origin: 'external',
@@ -1700,6 +1960,21 @@ export class AudioWorld implements World {
       ...view,
       tools: view.tools.map((tool) => ({ ...tool, summary: TOOL_SUMMARIES[tool.name] })),
     };
+  }
+
+  private async musicState(): Promise<unknown> {
+    return { separator: this.demucs.status(), ffmpeg: Boolean((await this.ffmpegInfo()).path), tasks: this.music.list() };
+  }
+
+  private async shipMusic(task: MusicTask): Promise<void> {
+    if (task.origin !== 'tool' || !this.host) return;
+    const tool = task.kind === 'mix' ? 'audio_mix' : 'audio_separate';
+    await this.host.pushEvent({
+      type: task.phase === 'done' ? task.kind === 'mix' ? 'audio.mixed' : 'audio.separated' : 'audio.failed',
+      ts: nowIso(this.opts.timezone), source: this.id, origin: 'external', senderKey: this.id,
+      text: task.phase === 'done' ? `${tool}（${task.id}）已完成：${task.outputs.map((output) => `${output.name} ${output.path}`).join('；')}` : `${tool}（${task.id}）失败：${task.detail}`,
+      meta: { job: task.id, outputs: task.outputs },
+    }, { deliver: true }).catch(() => {});
   }
 
   /** 队列页的数据面：列表与三个动作都回一份新快照。 */
@@ -1904,7 +2179,7 @@ export class AudioWorld implements World {
           const message = err instanceof Error ? err.message : String(err);
           if (gen !== this.speakGen) return;
           void this.host?.pushEvent({
-            type: 'audio.say_failed',
+            type: 'audio.failed',
             ts: nowIso(this.opts.timezone),
             source: this.id,
             origin: 'external',
@@ -1979,7 +2254,7 @@ export class AudioWorld implements World {
     void next.catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
       void this.host?.pushEvent({
-        type: 'audio.transcribe_failed',
+        type: 'audio.failed',
         ts: nowIso(this.opts.timezone),
         source: this.id,
         origin: 'external',

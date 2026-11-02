@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createWebUi } from 'cortico/web/client/ui/index.ts';
 import type { WebUiPanelContext } from 'cortico/web/shared/client-panel.ts';
 import client from '../src/webui/client.ts';
@@ -18,6 +18,11 @@ const state = {
     assets: { phase: 'absent', done: 0, total: 0, detail: null, dir: 'D:/home/models/audio/rvc', bytes: 370391200 },
   },
   singer: { models: { phase: 'absent', done: 0, total: 0, detail: null, dir: 'D:/home/models/audio/singer' } },
+  demucs: {
+    source: { phase: 'absent', done: 0, total: 0, detail: null, dir: 'D:/home/runtimes/audio/demucs-onnx/source/0.3.4' },
+    environment: { phase: 'absent', done: 0, total: 0, detail: null, dir: 'D:/home/runtimes/audio/demucs-onnx' },
+    weights: { phase: 'absent', done: 0, total: 0, detail: null, dir: 'D:/home/models/audio/demucs-onnx' },
+  },
   env: {
     gpt: { phase: 'absent', done: 0, total: 0, detail: null, dir: 'D:/home/runtimes/audio/gpt-sovits/e91506f1f' },
     rvc: { phase: 'absent', done: 0, total: 0, detail: null, dir: 'D:/home/runtimes/audio/rvc/81eed5e8f' },
@@ -32,10 +37,14 @@ const state = {
     sensevoice: { phase: 'absent', done: 0, total: 0, detail: null, dir: 'D:/home/models/audio/stt/sensevoice', bytes: 239549735 },
     paraformer: { phase: 'absent', done: 0, total: 0, detail: null, dir: 'D:/home/models/audio/stt/paraformer', bytes: 237202501 },
   },
+  installed: {
+    uv: false, ffmpeg: false, gpt: false, rvc: false, singer: false,
+    demucs: false, silero: false, firered: false, sensevoice: false, paraformer: false,
+  },
 };
 
 describe('依赖页', () => {
-  it('能把四张卡挂出来并显示状态', async () => {
+  it('各项依赖逐行显示状态', async () => {
     const root = document.createElement('div');
     const ui = createWebUi({
       memo: { get: (_k, fallback) => fallback, set: () => {} },
@@ -62,6 +71,7 @@ describe('依赖页', () => {
     expect(text).toContain('GPT-SoVITS');
     expect(text).toContain('RVC');
     expect(text).toContain('DiffSinger');
+    expect(text).toContain('Demucs 分离');
     expect(text).toContain('Silero VAD');
     expect(text).toContain('FireRed VAD');
     expect(text).toContain('SenseVoice');
@@ -74,6 +84,7 @@ describe('依赖页', () => {
     ready.project = { ...ready.project, phase: 'ready' };
     ready.rvc.project = { ...ready.rvc.project, phase: 'ready' };
     ready.vad.firered = { ...ready.vad.firered, phase: 'ready' };
+    for (const key of ['source', 'environment', 'weights']) ready.demucs[key].phase = 'ready';
     const root = document.createElement('div');
     const ui = createWebUi({
       memo: { get: (_k, fallback) => fallback, set: () => {} },
@@ -92,6 +103,7 @@ describe('依赖页', () => {
     await client.panels.deps.mount(ctx);
     const text = root.textContent ?? '';
     expect(text).toContain('源码 已装');
+    expect(text).toContain('源码 已装 · 环境 已装 · 权重 已装');
     expect(text).not.toContain('e91506f1f');
     expect(text).not.toContain('c30ec49e8');
   });
@@ -100,6 +112,8 @@ describe('依赖页', () => {
     const working = structuredClone(state) as any;
     working.project = { ...working.project, phase: 'working', done: 12 * 1024 * 1024, total: 0, detail: '下载源码' };
     working.weights = { ...working.weights, phase: 'working', done: 50, total: 200, detail: 's2Gv5turbo.pth' };
+    working.demucs.source.phase = 'ready';
+    working.demucs.environment = { ...working.demucs.environment, phase: 'working', detail: '安装中' };
     const root = document.createElement('div');
     const ui = createWebUi({
       memo: { get: (_k, fallback) => fallback, set: () => {} },
@@ -119,6 +133,8 @@ describe('依赖页', () => {
     expect(text).toContain('下载源码');
     expect(text).toContain('12.0 MB');
     expect(text).toContain('25%');
+    expect(text).toContain('源码 已装 · 环境 安装中');
+    expect(text).not.toContain('装 torch');
   });
 
   it('检测没回来之前只显示「识别中」，按钮先不出现', async () => {
@@ -220,6 +236,43 @@ describe('依赖页', () => {
     copy.click();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(written).toEqual([`权重：${failed.weights.detail}`]);
+  });
+
+  it('装过的行才给「卸载」，确认后才调用；系统里的 uv 不给', async () => {
+    const installed = structuredClone(state);
+    installed.installed.gpt = true;
+    const root = document.createElement('div');
+    const ui = createWebUi({
+      memo: { get: (_k, fallback) => fallback, set: () => {} },
+      overlayHost: document.body,
+      signal: new AbortController().signal,
+    });
+    ui.confirm = vi.fn(async () => true);
+    const invoke = vi.fn(async () => installed);
+    const ctx = {
+      root,
+      ui,
+      language: 'zh',
+      signal: new AbortController().signal,
+      invoke,
+      interval: () => ({ dispose: () => {} }),
+    } as unknown as WebUiPanelContext;
+    await client.panels.deps.mount(ctx);
+
+    const rowOf = (name: string): HTMLElement =>
+      Array.from(root.querySelectorAll('.dep-row')).find((row) => row.querySelector('.dep-name')?.textContent === name) as HTMLElement;
+    const uninstallOf = (name: string): HTMLButtonElement =>
+      Array.from(rowOf(name).querySelectorAll('button')).find((button) => button.textContent === '卸载') as HTMLButtonElement;
+
+    expect(uninstallOf('GPT-SoVITS').hidden).toBe(false);
+    expect(uninstallOf('uv').hidden).toBe(true);
+    uninstallOf('GPT-SoVITS').click();
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('uninstall', ['gpt']));
+    expect(ui.confirm).toHaveBeenCalledWith(expect.objectContaining({
+      title: '卸载 GPT-SoVITS？',
+      body: expect.stringContaining('Python 环境'),
+      danger: true,
+    }));
   });
 });
 

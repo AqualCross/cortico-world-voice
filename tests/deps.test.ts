@@ -6,6 +6,7 @@ import { parseNvidiaSmi, tierFor, CUDA_MIN_VRAM_MB } from '../src/gpu.ts';
 import { parseUvVersion, uvKnownPaths } from '../src/uv.ts';
 import { missingWeights, isProjectDir, projectDir, weightsDir, ProjectEnvJob } from '../src/install.ts';
 import { FIRERED_VAD_FILES, TIER_WEIGHTS } from '../src/catalog.ts';
+import { Job } from '../src/jobs.ts';
 
 let scratch: string;
 beforeEach(() => { scratch = mkdtempSync(join(tmpdir(), 'audio-deps-')); });
@@ -118,5 +119,19 @@ describe('获取中途失败', () => {
     const job = new ProjectEnvJob({ dir: () => join(scratch, 'absent'), uv: async () => 'uv.exe' });
     await job.install();
     expect(job.status()).toMatchObject({ phase: 'error', detail: '先装项目源码。' });
+  });
+});
+
+describe('安装任务状态', () => {
+  it('卸载后的重置会清掉上一次的失败原因', async () => {
+    class FailingJob extends Job {
+      protected present(): boolean { return false; }
+      protected async work(): Promise<void> { throw new Error('boom'); }
+    }
+    const job = new FailingJob();
+    await job.install();
+    expect(job.status()).toMatchObject({ phase: 'error', detail: 'boom' });
+    job.reset();
+    expect(job.status()).toMatchObject({ phase: 'absent', detail: null });
   });
 });

@@ -27,6 +27,12 @@ export abstract class Job {
     return this.running !== null;
   }
 
+  /** 卸载后清回未装，连上一次的失败原因一起清掉；正在跑的任务不能重置。 */
+  reset(): void {
+    if (this.running) throw new Error('任务进行中，先取消再卸载。');
+    this.state = { phase: 'absent', done: 0, total: 0, detail: null };
+  }
+
   install(): Promise<void> {
     if (this.running) return this.running;
     this.abort = new AbortController();

@@ -1,5 +1,5 @@
 /**
- * 工具说明的部署覆盖：把每个工具声明里的 description / title 抽成可编辑的字段，
+ * 工具设置的部署覆盖：工具开关，以及每个工具声明里的 description / title 可编辑字段，
  * 覆盖按 JSON Pointer 存在 `<部署>/worlds/<id>/tool-text.json`；包内那份只读。
  * 模型看到的工具表用 `resolve()`，面板编辑用 `read()` / `save()` / `reset()`。
  */
@@ -66,19 +66,23 @@ function setText(tool: Record<string, unknown>, path: string, value: string): vo
 interface Layer {
   raw: string;
   tools: Record<string, Record<string, string>>;
+  disabledTools?: string[];
   error?: string;
 }
 
 function readLayer(path: string | null): Layer {
   if (!path || !existsSync(path)) return { raw: '', tools: {} };
-  const raw = readFileSync(path, 'utf8');
+  let raw = '';
   try {
+    raw = readFileSync(path, 'utf8');
     const data = JSON.parse(raw.replace(/^\uFEFF/, '')) as Record<string, unknown>;
     if (data.version !== 1 || !object(data.tools)
-      || !Object.values(data.tools).every((fields) => object(fields) && Object.values(fields).every((text) => typeof text === 'string'))) {
-      throw new Error('Expected version 1 and a tools object containing text overrides.');
+      || !Object.values(data.tools).every((fields) => object(fields) && Object.values(fields).every((text) => typeof text === 'string'))
+      || (data.disabledTools !== undefined && (!Array.isArray(data.disabledTools) || !data.disabledTools.every((name) => typeof name === 'string')))) {
+      throw new Error('Expected version 1, a tools object containing text overrides, and optional disabledTools names.');
     }
-    return { raw, tools: data.tools as Record<string, Record<string, string>> };
+    return { raw, tools: data.tools as Record<string, Record<string, string>>,
+      ...(data.disabledTools === undefined ? {} : { disabledTools: [...new Set(data.disabledTools as string[])] }) };
   } catch (error) {
     return { raw, tools: {}, error: error instanceof Error ? error.message : String(error) };
   }
@@ -87,9 +91,12 @@ function readLayer(path: string | null): Layer {
 export interface ToolTextView {
   revision: string;
   overrides: Record<string, Record<string, string>>;
+  disabledTools: string[];
+  defaultDisabledTools: string[];
   warnings: Array<{ layer: 'package' | 'deployment'; tool?: string; path?: string; error?: string }>;
   tools: Array<Record<string, unknown> & {
     name: string;
+    enabled: boolean;
     fields: Array<ToolTextField & { inheritedText: string; inheritedSource: 'default' | 'package'; text: string; source: 'default' | 'package' | 'deployment' }>;
   }>;
 }
@@ -100,6 +107,8 @@ export interface ToolTextOptions {
   /** bot 代码包目录；包内 `worlds/<id>/tool-text.json` 作为上层覆盖。 */
   packageDir: string;
   id: string;
+  /** 没有部署开关覆盖时默认关闭的工具。 */
+  defaultDisabledTools?: readonly string[];
 }
 
 /** 包内默认只读；覆盖只写部署这一层。 */
@@ -108,9 +117,11 @@ export class ToolTextStore {
   private readonly fields: Map<string, Map<string, ToolTextField>>;
   private readonly path: string | null;
   private readonly packagePath: string | null;
+  private readonly defaultDisabledTools: string[];
 
   constructor(defaults: ReadonlyArray<ToolDecl>, opts: ToolTextOptions) {
     this.defaults = defaults;
+    this.defaultDisabledTools = [...new Set(opts.defaultDisabledTools ?? [])];
     this.fields = new Map(defaults.map((tool) => [tool.name, new Map(toolTextFields(tool).map((field) => [field.path, field]))]));
     this.path = opts.botDir ? join(opts.botDir, 'worlds', opts.id, 'tool-text.json') : null;
     this.packagePath = opts.packageDir ? join(opts.packageDir, 'worlds', opts.id, 'tool-text.json') : null;
@@ -119,6 +130,8 @@ export class ToolTextStore {
   read(): ToolTextView {
     const inherited = readLayer(this.packagePath);
     const deployment = readLayer(this.path);
+    // 部署设置损坏时保持关闭，避免原本禁用的工具因解析失败而重新暴露。
+    const disabledTools = deployment.error ? this.defaults.map((tool) => tool.name) : deployment.disabledTools ?? this.defaultDisabledTools;
     const warnings: ToolTextView['warnings'] = [];
     // 深拷贝一份，免得两份声明共享同一个 schema 节点。
     const tools = JSON.parse(JSON.stringify(this.defaults)) as Array<Record<string, unknown> & { name: string }>;
@@ -135,11 +148,14 @@ export class ToolTextStore {
       }
     }
     return {
-      revision: createHash('sha256').update(JSON.stringify([this.defaults, inherited.raw, deployment.raw])).digest('hex'),
+      revision: createHash('sha256').update(JSON.stringify([this.defaults, this.defaultDisabledTools, inherited.raw, deployment.raw])).digest('hex'),
       overrides: deployment.tools,
+      disabledTools,
+      defaultDisabledTools: this.defaultDisabledTools,
       warnings,
       tools: tools.map((tool) => ({
         ...tool,
+        enabled: !disabledTools.includes(tool.name),
         fields: [...(this.fields.get(tool.name)?.values() ?? [])].map((field) => {
           const inheritedText = inherited.tools[tool.name]?.[field.path] ?? field.defaultText;
           const overridden = Object.hasOwn(deployment.tools[tool.name] ?? {}, field.path);
@@ -156,24 +172,35 @@ export class ToolTextStore {
     };
   }
 
-  /** 模型看到的工具表：应用覆盖，丢掉编辑用的 fields。 */
+  /** 模型看到的工具表：移除关闭项，应用说明覆盖，丢掉面板元数据。 */
   resolve(): ToolDecl[] {
-    return this.read().tools.map(({ fields: _fields, ...tool }) => tool as unknown as ToolDecl);
+    return this.read().tools.filter((tool) => tool.enabled)
+      .map(({ fields: _fields, enabled: _enabled, ...tool }) => tool as unknown as ToolDecl);
   }
 
   private current(expectedRevision: string): ToolTextView {
     if (!this.path) throw new Error('The deployment directory is unavailable.');
     const current = this.read();
-    if (expectedRevision !== current.revision) throw new Error('工具说明已变化，请先刷新再保存。');
+    if (expectedRevision !== current.revision) throw new Error('工具设置已变化，请先刷新再保存。');
     return current;
   }
 
-  save({ expectedRevision, overrides }: { expectedRevision: string; overrides: unknown }): ToolTextView {
+  save({ expectedRevision, overrides, disabledTools }: { expectedRevision: string; overrides: unknown; disabledTools?: unknown }): ToolTextView {
     const current = this.current(expectedRevision);
     if (current.warnings.some((warning) => warning.layer === 'deployment' && warning.error)) {
       throw new Error('覆盖文件不合法，请先恢复默认再保存。');
     }
     if (!object(overrides)) throw new Error('Expected a tools object containing text overrides.');
+    const disabled = disabledTools === undefined ? current.disabledTools : disabledTools;
+    if (!Array.isArray(disabled) || !disabled.every((name) => typeof name === 'string')) {
+      throw new Error('Expected disabledTools to be an array of tool names.');
+    }
+    for (const name of disabled) {
+      if (!this.fields.has(name) && !current.disabledTools.includes(name)) throw new Error(`Unknown tool: ${name}.`);
+    }
+    const nextDisabled = [...new Set(disabled)] as string[];
+    const customSwitches = nextDisabled.length !== this.defaultDisabledTools.length
+      || nextDisabled.some((name) => !this.defaultDisabledTools.includes(name));
     const next: Record<string, Record<string, string>> = {};
     for (const [name, changes] of Object.entries(overrides)) {
       if (!object(changes)) throw new Error(`Invalid text overrides for ${name}.`);
@@ -193,11 +220,11 @@ export class ToolTextStore {
       }
       if (entries.length) next[name] = Object.fromEntries(entries);
     }
-    if (Object.keys(next).length) {
+    if (Object.keys(next).length || customSwitches) {
       mkdirSync(dirname(this.path!), { recursive: true });
       const temp = `${this.path}.${randomUUID()}.tmp`;
       try {
-        writeFileSync(temp, JSON.stringify({ version: 1, tools: next }, null, 2) + '\n', { flag: 'wx' });
+        writeFileSync(temp, JSON.stringify({ version: 1, tools: next, ...(customSwitches ? { disabledTools: nextDisabled } : {}) }, null, 2) + '\n', { flag: 'wx' });
         renameSync(temp, this.path!);
       } finally {
         rmSync(temp, { force: true });

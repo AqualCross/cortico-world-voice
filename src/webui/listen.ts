@@ -54,7 +54,7 @@ interface ListenState {
     lanes: RuntimeLane[];
     silero: { path: string; exists: boolean };
     stream?: { engine: string; dir: string; ready: boolean };
-    aed?: { ready: boolean };
+    aed?: { ready: boolean; model?: boolean; runtime?: boolean; detail?: string | null };
   };
 }
 
@@ -112,6 +112,7 @@ const TEXT = {
     classifyAed: '区分音乐与人声',
     classifyNote: '音乐块只写事件：不转写、不唤醒，也不留音频。',
     classifyMissingNote: 'AED 模型还没下载：去「依赖」页对「FireRed VAD」点「获取」。',
+    classifyRuntimeNote: 'FireRed 运行库没装好：重装扩展依赖后重启 Coopanion。',
     notifyCoo: '通知 Coo',
     level: '现在的音量',
     laneError: '这一路没在听：',
@@ -174,6 +175,7 @@ const TEXT = {
     classifyAed: 'Music vs voice',
     classifyNote: 'Music chunks raise the event only: no transcription, no wake, no audio kept.',
     classifyMissingNote: 'AED model missing: press Get on "FireRed VAD" on the Dependencies page.',
+    classifyRuntimeNote: 'FireRed runtime missing: reinstall the extension dependencies and restart Coopanion.',
     notifyCoo: 'Notify Coo',
     level: 'Live level',
     laneError: 'Not listening: ',
@@ -636,7 +638,9 @@ export const listenPanel: WebUiPanel = {
         })));
         if (classify === 'aed') {
           root.append(el('div', 'aud-note', t.classifyNote));
-          if (state.runtime && !state.runtime.aed?.ready) root.append(el('div', 'aud-note', t.classifyMissingNote));
+          const aed = state.runtime?.aed;
+          if (state.runtime && !aed?.model) root.append(el('div', 'aud-note', t.classifyMissingNote));
+          else if (aed && !aed.runtime) root.append(el('div', 'aud-note', t.classifyRuntimeNote));
         }
       }
     }

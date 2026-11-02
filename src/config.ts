@@ -1,4 +1,5 @@
 import type { ConfigGroup } from 'cortico/core/types.ts';
+import type { AbcConfig } from './music-abc/world.js';
 
 export type SpeakEngine = 'gpt-sovits' | 'dashscope' | 'openai';
 export type ConvertEngine = 'rvc';
@@ -16,6 +17,7 @@ export interface AudioConfigSection {
   ffmpegPath: string;
   /** 播放音量，0–100；条目没单独指定时用它。 */
   volume: number;
+  music: { abc: AbcConfig };
   /** 桌面字幕层：说话时在屏幕上显示一条透明背景的字幕。 */
   subtitle: {
     enabled: boolean;
@@ -121,6 +123,7 @@ export const AUDIO_DEFAULTS: AudioConfigSection = {
   uvPath: '',
   ffmpegPath: '',
   volume: 80,
+  music: { abc: { instrument: '', delivery: 'event', eventDelivery: 'archive' } },
   subtitle: {
     enabled: true,
     size: 34,

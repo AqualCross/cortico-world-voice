@@ -34,10 +34,10 @@ describe('Audio World', () => {
     expect(text).toContain('文本转语音');
     expect(text).toContain('监听：没有勾选的来源');
   });
-  it('面板顺序：依赖、说话、听、工具；播放与记录收进说话/听的二级页', async () => {
+  it('面板顺序：依赖、说话、听、音乐、工具；播放与记录收进说话/听的二级页', async () => {
     const world = AUDIO.create(fakeWorldContext(AUDIO, { scratchDir }));
     const panels = world.webUi?.().panels?.map((panel) => panel.id) ?? [];
-    expect(panels).toEqual(['deps', 'speak', 'listen', 'tools']);
+    expect(panels).toEqual(['deps', 'speak', 'listen', 'music', 'tools']);
   });
 
   it('导入、选中参考音频与变声音色都写回配置', async () => {
@@ -320,10 +320,12 @@ describe('Audio World', () => {
     expect(text).toContain('后台开始合成');
     expect(text).toContain('audio.say_done');
     // 默认引擎没配参考音频：这一句合成失败，错误等后台推成事件。
-    for (let i = 0; i < 100 && !host.events.some((event) => event.type === 'audio.say_failed'); i += 1) {
+    for (let i = 0; i < 100 && !host.events.some((event) => event.type === 'audio.failed'); i += 1) {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    expect(host.events.some((event) => event.type === 'audio.say_failed')).toBe(true);
+    const failure = host.events.find((event) => event.type === 'audio.failed');
+    expect(failure).toMatchObject({ origin: 'external' });
+    expect(failure?.text).toContain('audio_say（say1）没说出来：');
     (world as unknown as { host: unknown }).host = null;
   });
 

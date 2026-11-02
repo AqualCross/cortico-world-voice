@@ -1,7 +1,7 @@
 import { describeTools, type WorldDefinition } from 'cortico/world.ts';
 import { modelsRoot, runtimesRoot } from 'cortico/paths.ts';
 import { AUDIO_DEFAULTS, type AudioConfigSection } from './config.ts';
-import { AUDIO_TOOL_DECLS, AudioWorld } from './world.ts';
+import { AUDIO_TOOL_DECLS, TOOL_SUMMARIES, AudioWorld } from './world.ts';
 
 export const AUDIO: WorldDefinition<AudioConfigSection> = {
   id: 'audio',
@@ -21,12 +21,7 @@ export const AUDIO: WorldDefinition<AudioConfigSection> = {
     storeSecret: (name, value) => ctx.storeSecret(name, value),
   }),
   describe: {
-    tools: describeTools(AUDIO_TOOL_DECLS, {
-      audio_status: {
-        zh: '报告语音能力此刻的接入状态。',
-        en: 'Reports which audio capabilities are wired up right now.',
-      },
-    }),
+    tools: describeTools(AUDIO_TOOL_DECLS, TOOL_SUMMARIES),
     events: [
       {
         type: 'audio.heard',
@@ -40,33 +35,27 @@ export const AUDIO: WorldDefinition<AudioConfigSection> = {
         description: { zh: 'silent 合成完成，带回本地路径与音频附件句柄。', en: 'A silent audio_say finished; it carries the local path and the audio as a blob attachment.' },
       },
       {
-        type: 'audio.say_failed',
-        description: { zh: '后台合成一句话失败了；成功不打扰。', en: 'A background audio_say synthesis failed; successes stay silent.' },
+        type: 'audio.failed',
+        description: {
+          zh: '后台说话、转写、变声、唱歌、分离或混音失败，正文包含工具名、任务编号与失败原因。',
+          en: 'A background speech, transcription, conversion, singing, separation, or mixing task failed; the text includes the tool name, job id, and error.',
+        },
       },
       {
         type: 'audio.transcribed',
         description: { zh: '后台转写完成，带回文字。', en: 'A background transcription finished; it carries the text.' },
       },
       {
-        type: 'audio.transcribe_failed',
-        description: { zh: '后台转写失败。', en: 'A background transcription failed.' },
-      },
-      {
         type: 'audio.convert_done',
         description: { zh: 'silent 变声完成，带回本地路径与音频附件句柄。', en: 'A silent audio_convert finished; it carries the local path and the audio as a blob attachment.' },
-      },
-      {
-        type: 'audio.convert_failed',
-        description: { zh: '后台变声失败了；成功不打扰。', en: 'A background audio_convert conversion failed; successes stay silent.' },
       },
       {
         type: 'audio.sing_done',
         description: { zh: 'silent 唱歌完成，带回本地路径与音频附件句柄。', en: 'A silent audio_sing finished; it carries the local path and the audio as a blob attachment.' },
       },
-      {
-        type: 'audio.sing_failed',
-        description: { zh: '后台唱歌失败了；成功不打扰。', en: 'A background audio_sing synthesis failed; successes stay silent.' },
-      },
+      { type: 'audio.separated', description: { zh: '歌曲分离完成，带回人声与伴奏路径。', en: 'Song separation finished with paths to vocals and accompaniment.' } },
+      { type: 'audio.mixed', description: { zh: '混音完成，带回 WAV 路径。', en: 'Mixing finished with the WAV file path.' } },
+      { type: 'audio.abc_played', description: { zh: 'ABC 演奏完成：WAV 附件、曲谱版本与文件路径。', en: 'ABC rendering completed, with a WAV attachment and score revision.' }, trigger: 'debounce' },
     ],
   },
 };

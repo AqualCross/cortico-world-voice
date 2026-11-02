@@ -3,7 +3,7 @@
 Owner: `src/definition.ts`
 
 声音整合包：一个 World 承载「听、转写、说话、唱歌、变声、播放」，避免 World 之间互相调 HTTP。
-当前进度：骨架 + 依赖管理 + 播放 + 本机识别 + 监听（采集 / VAD / 切块 / 自动转写）+ 变声（RVC）+ 唱歌（DiffSinger）。
+当前进度：依赖管理、播放、本机识别、监听、变声（RVC）、唱歌（DiffSinger），以及音乐的分离、混音与 ABC 创作。
 能力接入一个就在 `AudioWorld.capabilities()` 里点亮一项。
 
 | 文件 | 内容 |
@@ -11,6 +11,10 @@ Owner: `src/definition.ts`
 | `src/definition.ts` | `WorldDefinition`：id、label、默认配置段、`create()`、`describe` |
 | `src/config.ts` | 配置段类型、默认值与配置键声明（面板写回时按它验收） |
 | `src/world.ts` | `World` 实现：生命周期、`audio_status`、依赖页的 `invoke` 与状态快照 |
+| `src/music-process.ts` | 分离/混音任务、历史与输出文件 |
+| `src/music-demucs.ts` | Demucs ONNX 源码、环境、权重三个阶段的获取与续装 |
+| `src/music-abc/` | 从 ABC 音乐扩展迁入的曲谱、音源与 WAV 渲染实现 |
+| `src/webui/music.ts` | 「音乐」与分离、混音、ABC 二级页 |
 | `src/gpu.ts` | `nvidia-smi` 检测、解析与选档（≥ 4 GB 走显卡档） |
 | `src/uv.ts` | uv 识别（配置 → PATH → 常见位置 → 自己装的那份）与安装 |
 | `src/ffmpeg.ts` | ffmpeg 识别与安装 |
@@ -44,7 +48,7 @@ Owner: `src/definition.ts`
 | `src/import-legacy.ts` | 旧 stt / tts / listen 三个 World 的记录一次性并进来 |
 | `src/wav.ts` | 从 WAV 头算时长（认不出就回 null） |
 | `src/webui/records.ts` | 「记录」页：转写 / 语音两栏 |
-| `src/webui/client.ts` | 「依赖」「说话」「听」「工具」四页的面板入口（播放与记录收在二级页签） |
+| `src/webui/client.ts` | 「依赖」「说话」「听」「音乐」「工具」的面板入口（播放与记录收在二级页签） |
 | `src/ENV_PROMPT.md` | 环境提示词模板；默认留空，写清用法后再补 |
 | `tests/` | 干装载、事件、状态工具、显卡解析、权重缺失、依赖页挂载 |
 
@@ -55,12 +59,25 @@ Owner: `src/definition.ts`
 
 ## 工具
 
-- `audio_say`：按当前引擎合成并排队播放；`silent` 不播放，合成完以 `audio.say_done` 事件带回：正文里有本地路径，同时挂一份音频附件（Core 分配的 `log:` 句柄）。失败都走 `audio.say_failed`。
-- `audio_transcribe`：后台转写音频文件（本机 SenseVoice 或云端引擎），文字进「记录 → 转写」并以 `audio.transcribed` 事件带回；失败走 `audio.transcribe_failed`。
+- `audio_say`：按当前引擎合成并排队播放；`silent` 不播放，合成完以 `audio.say_done` 事件带回：正文里有本地路径，同时挂一份音频附件（Core 分配的 `log:` 句柄）。失败走 `audio.failed`。
+- `audio_transcribe`：后台转写音频文件（本机 SenseVoice 或云端引擎），文字进「记录 → 转写」并以 `audio.transcribed` 事件带回；失败走 `audio.failed`。
 - `audio_listen`：开始 / 停止 / 查看监听；状态里带每路的电平、块数与最近听到的几句。
-- `audio_convert`：把一段音频换成当前变声音色；立刻回执，成功进语音记录并自动播放；`silent` 不播放，完成以 `audio.convert_done` 带回路径与音频附件句柄。失败推 `audio.convert_failed`。
-- `audio_sing`：把歌词唱出来（DiffSinger）；立刻回执，成功进语音记录并自动播放；`silent` 不播放，完成以 `audio.sing_done` 带回路径与音频附件句柄。失败推 `audio.sing_failed`。
+- `audio_convert`：把一段音频换成当前变声音色；立刻回执，成功进语音记录并自动播放；`silent` 不播放，完成以 `audio.convert_done` 带回路径与音频附件句柄。失败走 `audio.failed`。
+- `audio_sing`：把歌词唱出来（DiffSinger）；立刻回执，成功进语音记录并自动播放；`silent` 不播放，完成以 `audio.sing_done` 带回路径与音频附件句柄。失败走 `audio.failed`。
 - `audio_play` / `audio_queue` / `audio_status`：播放队列与状态。播放、变声、转写都接受本地路径或 Core 的 `log:`/`mem:` 附件句柄。
+- `audio_separate`：后台把歌曲分成人声与伴奏，完成以 `audio.separated` 带回两个路径。
+- `audio_mix`：按每轨音量（0–200%）与延迟（秒）混合 1–16 条本地音轨，完成以 `audio.mixed` 带回 WAV 路径。
+- `audio_abc_music_score` / `audio_abc_music_play` / `audio_abc_music_control`：沿用 ABC 音乐扩展的工具；事件交付改用 `audio.abc_played`，来源为 `external`。
+
+说话、转写、变声、唱歌、分离和混音的后台失败统一推送 `audio.failed`，正文保留工具名、任务编号与失败原因。
+
+## 音乐
+
+- **分离**：在「依赖」页的「Demucs 分离」行获取，分离页也保留同一任务的快捷入口。按「源码 → 环境 → 权重」顺序获取：校验并解压 `demucs-onnx` 0.3.4 源码、建立独立 Python 环境、下载 htdemucs ONNX 权重（约 166 MB）。检测到 NVIDIA 显卡时装 `onnxruntime-gpu`（把 CUDA 13 与 cuDNN 9 运行库一起放进环境，首次约 1.5 GB），分离默认走显卡；驱动或运行库不齐时自动退回 CPU，任务详情里会显示实际执行器。没有显卡时只装 CPU 版，两种档位都不需要 torch 或 torchaudio。各阶段独立显示状态，重试跳过已完成阶段；输出人声与伴奏 WAV，支持取消、试听、复制路径和加入混音。源码、环境和权重分别保存在 `runtimes/audio/demucs-onnx/source/0.3.4`、`runtimes/audio/demucs-onnx/.venv`、`models/audio/demucs-onnx`；旧版 PyTorch 的目录另行保留。
+- **混音**：需要 ffmpeg，可从本机文件、分离结果或 ABC 作品添加音轨，设置各轨音量与开始时间，生成立体声 WAV。最长一轨结束后收尾，并限制峰值避免削波；任务在后台执行，可取消。
+- **ABC**：完整迁入 `cortico-world-music-abc` 的乐谱编辑、五线谱预览、试听、WAV/MIDI/ABC 作品与 SF2/SF3 音源管理。默认不附带采样音源；可在「乐器」获取 GeneralUser GS 或导入本机音源，保留原有许可提示。作品可以加入混音。
+
+数据存放在 `<dataDir>/audio/music/`：分离与混音各自保存任务与输出，ABC 数据在 `abc/`。ABC 设置在 `worlds.audio.music.abc`，工具说明沿用声音扩展的统一「工具」页。原独立 ABC 扩展的数据目录与配置保留。
 
 合成、变声与唱歌的成品落在 `<dataDir>/audio/out/`，转写记录在 `<dataDir>/audio/transcripts/`，
 转写与语音各自是「目录 + index.json」，面板的「记录」页读它们。听到的声音不再存音频文件，只把正文写进转写记录。
@@ -110,8 +127,15 @@ SenseVoice 的情感与音频事件（笑声、掌声、背景音乐等）跟正
 
 ## 「工具」页
 
-每个工具的描述与参数说明都能在页面上改；保存到 `<部署>/worlds/audio/tool-text.json`，
-下次会话构建工具表时生效。可筛选、按条恢复默认、整份恢复。
+每个工具都有「向模型开放」开关，`audio_listen` 默认关闭，其余默认开放；用户可自行开启。
+已有明确保存的开关覆盖会继续保留。关闭后，该工具会从模型工具表中移除；
+工具表更新后，模型即使记得工具名，再调用也由 Cortico 按不存在的工具处理。
+开关与描述、参数说明一起保存到 `<部署>/worlds/audio/tool-text.json`，仅影响当前部署。
+保存后点框架显示的「前缀待重载」更新当前会话；新会话或重启时也会读取这些设置。
+可筛选、按条恢复默认文字、整份恢复（`audio_listen` 回到关闭，其余回到开放）。
+
+这里控制模型能调用哪些工具；关闭 `audio_listen` 不会停止已开启的声音采集，也不会关闭「通知 Coo」。
+要停用采集与通知，请到「听」页操作。市场的「读取隐私」是包级标注，不随本机工具开关自动改变。
 
 ## 「依赖」页
 
@@ -127,6 +151,8 @@ SenseVoice 的情感与音频事件（笑声、掌声、背景音乐等）跟正
 - **VAD / 细分**：Silero VAD、FireRed VAD 流式 ONNX + FireRed AED（`models/audio/vad/`，FireRed 两个模型共约 4.7 MB，共用 `cmvn.ark`）。
 - **语音识别**：整段用 SenseVoiceSmall int8（`models/audio/stt/sensevoice/`）；
   流式用 Paraformer 中英流式模型（`models/audio/stt/paraformer/`，约 226 MB，sherpa-onnx OnlineRecognizer）。
+- **卸载**：本扩展装过的行会多一个「卸载」按钮，确认后先停掉占用文件的子进程，再删本扩展写进部署目录的东西；
+  系统里已有的 uv / ffmpeg、用户导入的音色与声库、已生成的音频记录都不动。安装任务进行中不能卸载。
 
 ## 约定
 

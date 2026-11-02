@@ -47,7 +47,21 @@ export function loadOnnxRuntime(): OrtModule {
     return require('onnxruntime-node') as OrtModule;
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
-    throw new Error(`载入 onnxruntime-node 失败：${detail}。FireRed 切分需要它；请在扩展目录里安装依赖后重启应用，或改用 silero / energy。`);
+    throw new Error(`载入 onnxruntime-node 失败：${detail}。FireRed 切分与 AED 需要它；请在扩展目录里安装依赖后重启应用，或改用 silero / energy。`);
+  }
+}
+
+let ortLoaded = false;
+
+/** onnxruntime-node 能不能加载。成功一次就记下；失败每次重试，装好依赖重挂 World 后即可恢复。 */
+export function onnxRuntimeStatus(): { ok: boolean; detail: string | null } {
+  if (ortLoaded) return { ok: true, detail: null };
+  try {
+    loadOnnxRuntime();
+    ortLoaded = true;
+    return { ok: true, detail: null };
+  } catch (err) {
+    return { ok: false, detail: err instanceof Error ? err.message : String(err) };
   }
 }
 

@@ -442,12 +442,15 @@ export function asrEnvDir(roots: InstallRoots): string {
 }
 
 export const STT_PACKAGES: readonly string[] = ['sherpa-onnx==2.0.1', 'numpy'];
+/** 每个独立 venv 装的东西不一样，自检也得跟着换，不能统一 import sherpa_onnx。 */
+export const STT_CHECK = 'import sherpa_onnx, numpy;print(sherpa_onnx.__version__)';
 
 export class UvPackagesJob extends Job {
   constructor(
     private readonly dir: () => string,
     private readonly uv: () => Promise<string>,
     private readonly packages: readonly string[],
+    private readonly check: string,
   ) {
     super();
   }
@@ -460,6 +463,6 @@ export class UvPackagesJob extends Job {
   protected async work(signal: AbortSignal): Promise<void> {
     const uv = await this.uv();
     if (!uv) throw new Error('先装 uv（依赖页第一行）。');
-    await createUvEnv({ uv, dir: this.dir(), packages: this.packages, signal, onStage: (stage) => this.report(stage) });
+    await createUvEnv({ uv, dir: this.dir(), packages: this.packages, check: this.check, signal, onStage: (stage) => this.report(stage) });
   }
 }

@@ -1,7 +1,16 @@
 /**
- * WAV 的两件小事：从文件头读时长、把 PCM16 包成 WAV。
+ * WAV 的几件小事：从文件头读时长、把 PCM16 包成 WAV。
  * 采集切出来的块按 16 kHz 单声道存；别人的 mp3/ogg 认不出时长，调用方别编一个假的。
  */
+import { closeSync, openSync, readSync, statSync } from 'node:fs';
+
+export interface WavLayout {
+  /** `data` 块正文的起点。 */
+  dataOffset: number;
+  /** `data` 块正文长度；声明值与文件实际大小取小。 */
+  dataBytes: number;
+  bytesPerSecond: number;
+}
 
 /** 把 16-bit 单声道 PCM 包成 WAV（44 字节头）。 */
 export function encodeWav(pcm: Int16Array, sampleRate: number): Buffer {
@@ -25,14 +34,14 @@ export function encodeWav(pcm: Int16Array, sampleRate: number): Buffer {
 }
 
 /**
- * 从 WAV 头里读时长（秒）；不是能认的 RIFF/WAVE 就返回 null。
- * 云端返回的 mp3/ogg 认不出来，调用方别据此编一个假时长。
+ * 解析 RIFF 块；`data` 的声明大小可能被截断，调用方可用 `fileBytes` 给出整份文件长度。
  */
-export function wavSeconds(bytes: Buffer): number | null {
+export function wavLayout(bytes: Buffer, fileBytes = bytes.length): WavLayout | null {
   if (!bytes || bytes.length < 44) return null;
   if (bytes.toString('ascii', 0, 4) !== 'RIFF' || bytes.toString('ascii', 8, 12) !== 'WAVE') return null;
   let off = 12;
   let fmt: { channels: number; sampleRate: number; bits: number } | null = null;
+  let dataOffset = 0;
   let dataBytes = 0;
   while (off + 8 <= bytes.length) {
     const id = bytes.toString('ascii', off, off + 4);
@@ -45,13 +54,37 @@ export function wavSeconds(bytes: Buffer): number | null {
         bits: bytes.readUInt16LE(body + 14),
       };
     } else if (id === 'data') {
-      dataBytes = Math.min(size, Math.max(0, bytes.length - body));
+      dataOffset = body;
+      dataBytes = Math.min(size, Math.max(0, fileBytes - body));
+      if (dataBytes) break;
     }
     // 块按字对齐：奇数长度后面补一个 0 字节。
     off = body + size + (size % 2);
   }
-  if (!fmt || !fmt.channels || !fmt.sampleRate || !fmt.bits || !dataBytes) return null;
+  if (!fmt || !dataOffset || !dataBytes) return null;
   const bytesPerSecond = fmt.sampleRate * fmt.channels * (fmt.bits / 8);
   if (!bytesPerSecond) return null;
-  return dataBytes / bytesPerSecond;
+  return { dataOffset, dataBytes, bytesPerSecond };
+}
+
+/** 只读文件头拿布局，不把整个 WAV 读进内存。 */
+export function wavFileLayout(path: string): WavLayout | null {
+  const fileBytes = statSync(path).size;
+  const fd = openSync(path, 'r');
+  try {
+    const head = Buffer.alloc(Math.min(fileBytes, 64 * 1024));
+    readSync(fd, head, 0, head.length, 0);
+    return wavLayout(head, fileBytes);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * 从 WAV 头里读时长（秒）；不是能认的 RIFF/WAVE 就返回 null。
+ * 云端返回的 mp3/ogg 认不出来，调用方别据此编一个假时长。
+ */
+export function wavSeconds(bytes: Buffer): number | null {
+  const layout = wavLayout(bytes);
+  return layout ? layout.dataBytes / layout.bytesPerSecond : null;
 }

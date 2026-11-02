@@ -1,6 +1,6 @@
 {
   "name": "cortico-world-voice",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "description": "让Coo能听能说。",
   "author": "AqualCross",
@@ -66,13 +66,14 @@
     "describe.json",
     "THIRD_PARTY_NOTICES.md",
     "vendor",
-    "python"
+    "python",
+    "licenses"
   ],
   "scripts": {
     "build": "node scripts/build-webui.mjs",
-    "test": "vitest run",
+    "test": "npm run build && vitest run && node --test tests/music-abc/*.test.mjs",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build && npm test && npm run typecheck"
+    "prepublishOnly": "npm test && npm run typecheck"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
@@ -85,9 +86,11 @@
     "vitest": "^2.1.8"
   },
   "dependencies": {
+    "abcjs": "6.7.2",
     "audify": "1.10.1",
     "loopback-capture": "^3.0.2",
     "onnxruntime-node": "^1.31.1",
-    "sherpa-onnx-node": "^1.13.8"
+    "sherpa-onnx-node": "^1.13.8",
+    "spessasynth_core": "4.3.22"
   }
 }
