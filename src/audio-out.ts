@@ -1,12 +1,13 @@
 /**
- * 常驻的 PCM 输出：audify（RtAudio / WASAPI）开一条流，按到达顺序写 16-bit 交错 PCM。
- * 流只开一次，换采样率或换设备时才重开；音量走 RtAudio 的 outputVolume。
+ * 一次播放的 PCM 输出：audify（RtAudio / WASAPI）开一条流，按到达顺序写 16-bit 交错 PCM。
+ * 每次播放新开一条流，跟随当前默认输出设备；音量走 RtAudio 的 outputVolume。
  */
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 
 interface RtAudioStream {
+  start(): void;
   write(pcm: Buffer): void;
   stop(): void;
   clearOutputQueue(): void;
@@ -64,6 +65,7 @@ export function applyGain(pcm: Buffer, gain: number): Buffer {
 export class PcmOutput {
   private rt: RtAudioStream | null = null;
   private rate = 0;
+  private frameBytes = FRAME_BYTES;
   private carry = Buffer.alloc(0);
   private endsAt = 0;
 
@@ -87,17 +89,17 @@ export class PcmOutput {
     rt.outputVolume = Math.max(0, Math.min(1, this.volume() / 100));
     const scaled = applyGain(pcm, gain);
     const merged = this.carry.length ? Buffer.concat([this.carry, scaled]) : scaled;
-    const whole = merged.length - (merged.length % FRAME_BYTES);
-    for (let at = 0; at < whole; at += FRAME_BYTES) rt.write(merged.subarray(at, at + FRAME_BYTES));
+    const whole = merged.length - (merged.length % this.frameBytes);
+    for (let at = 0; at < whole; at += this.frameBytes) rt.write(merged.subarray(at, at + this.frameBytes));
     this.carry = Buffer.from(merged.subarray(whole));
-    const seconds = whole / (OUTPUT_RATE * OUTPUT_CHANNELS * 2);
+    const seconds = whole / (this.rate * OUTPUT_CHANNELS * 2);
     this.endsAt = Math.max(this.endsAt, Date.now()) + seconds * 1000;
   }
 
   /** 一句写完：尾巴补静音成一帧再写。 */
   flush(): void {
     if (!this.rt || !this.carry.length) return;
-    const frame = Buffer.alloc(FRAME_BYTES);
+    const frame = Buffer.alloc(this.frameBytes);
     this.carry.copy(frame);
     this.rt.write(frame);
     this.endsAt = Math.max(this.endsAt, Date.now()) + 10;
@@ -111,13 +113,9 @@ export class PcmOutput {
     }
   }
 
-  /** 立刻停：丢掉没播的部分。 */
+  /** 立刻停：丢掉没播的部分，并关掉流；下一次 write 会重新开。 */
   cut(): void {
-    if (!this.rt) return;
-    this.rt.clearOutputQueue();
-    this.rt.stop();
-    this.carry = Buffer.alloc(0);
-    this.endsAt = 0;
+    this.close();
   }
 
   close(): void {
@@ -136,8 +134,8 @@ export class PcmOutput {
 
   private open(sampleRate: number): void {
     const rtAudio = new this.audify.RtAudio(process.platform === 'win32' ? this.audify.RtAudioApi.WINDOWS_WASAPI : undefined);
-    // openStream 返回的是实际帧长（数字），流本身挂在这个 RtAudio 实例上。
-    rtAudio.openStream(
+    // openStream 返回实际帧长；write 必须按它切，不能按请求的 FRAME_SAMPLES 写死。
+    const frames = rtAudio.openStream(
       { deviceId: rtAudio.getDefaultOutputDevice(), nChannels: OUTPUT_CHANNELS, firstChannel: 0 },
       null,
       this.audify.RtAudioFormat.RTAUDIO_SINT16,
@@ -148,6 +146,13 @@ export class PcmOutput {
       null,
     );
     this.rt = rtAudio as unknown as RtAudioStream;
+    this.frameBytes = (Number.isFinite(frames) && frames > 0 ? frames : FRAME_SAMPLES) * OUTPUT_CHANNELS * 2;
     this.rate = sampleRate;
+    try {
+      this.rt.start();
+    } catch (error) {
+      this.close();
+      throw error;
+    }
   }
 }

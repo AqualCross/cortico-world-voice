@@ -425,7 +425,6 @@ export class AudioWorld implements World {
   /** World 停一次加一，用来丢掉停止之前提交、还在合成的那些。 */
   private speakGen = 0;
   private host: WorldHost | null = null;
-  private output: PcmOutput | null = null;
   /** 本机识别子进程；模型目录变了就换一个。 */
   private asr: { modelDir: string; client: LocalAsr } | null = null;
   /** 本机 GPT-SoVITS 服务；档位或项目变了就重开。 */
@@ -739,16 +738,14 @@ export class AudioWorld implements World {
     this.rvcCache = null;
     this.singCache?.engine.dispose();
     this.singCache = null;
-    this.output?.close();
-    this.output = null;
   }
 
-  /** 有 audify + ffmpeg 时走常驻输出（边解边放），否则退回 PowerShell 播放。 */
+  /** 有 audify + ffmpeg 时每条播放新开一条 PCM 输出（跟随当前默认设备），否则退回 PowerShell 播放。 */
   private async playAny(opts: { path: string; volume: number; signal: AbortSignal }): Promise<void> {
     const audify = loadAudify();
     const ffmpeg = (await this.ffmpegInfo()).path;
     if (audify && ffmpeg && ffmpeg !== 'ffmpeg') {
-      const output = this.output ??= new PcmOutput(audify, () => 100);
+      const output = new PcmOutput(audify, () => 100);
       const onAbort = (): void => output.cut();
       opts.signal.addEventListener('abort', onAbort, { once: true });
       try {
@@ -756,6 +753,7 @@ export class AudioWorld implements World {
         return;
       } finally {
         opts.signal.removeEventListener('abort', onAbort);
+        output.close();
       }
     }
     await playFile(opts);
