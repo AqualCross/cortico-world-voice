@@ -1,7 +1,7 @@
 import type { ConfigGroup } from 'cortico/core/types.ts';
 import type { AbcConfig } from './music-abc/world.js';
 
-export type SpeakEngine = 'gpt-sovits' | 'dashscope' | 'openai';
+export type SpeakEngine = 'edge' | 'gpt-sovits' | 'dashscope' | 'openai';
 export type ConvertEngine = 'rvc';
 export type SingEngine = 'diffsinger';
 export type SttEngine = 'sensevoice' | 'moonshine' | 'dashscope' | 'dashscope-async' | 'openai';
@@ -33,6 +33,15 @@ export interface AudioConfigSection {
   speak: {
     engine: SpeakEngine;
     textLang: string;
+    /** Edge 在线朗读：免密钥、免安装，但必须联网；协议由 msedge-tts 维护。 */
+    edge: {
+      /** Edge 音色短名，例如 `zh-CN-XiaoyiNeural`。 */
+      voice: string;
+      /** 语速百分比（-50 到 +100）。 */
+      rate: number;
+      /** 音调相对 Hz（-50 到 +50）。 */
+      pitch: number;
+    };
     gptSovits: { tier: Tier; refAudio: string; refText: string; speed: number };
     dashscope: {
       baseUrl: string;
@@ -132,8 +141,9 @@ export const AUDIO_DEFAULTS: AudioConfigSection = {
     align: 'center',
   },
   speak: {
-    engine: 'gpt-sovits',
+    engine: 'edge',
     textLang: 'auto',
+    edge: { voice: 'zh-CN-XiaoyiNeural', rate: 0, pitch: 0 },
     gptSovits: { tier: 'auto', refAudio: '', refText: '', speed: 1 },
     dashscope: {
       // 千问AI平台官方入口（platform.qianwenai.com），不是私有域名。
@@ -277,8 +287,32 @@ export const AUDIO_CONFIG_GROUP: ConfigGroup = {
       [`${K}.speak.engine`]: {
         type: 'string',
         title: '说话引擎',
-        description: '本地 gpt-sovits，或走 HTTP 的 dashscope / openai。切换后只用到对应那一组字段。',
+        description: 'edge朗读（免费、免密钥），本地 gpt-sovits，或走 HTTP 的 dashscope / openai。切换后只用到对应那一组字段。',
         'x-options': 'audio-speak-engine',
+        'x-hot': true,
+      },
+      [`${K}.speak.edge.voice`]: {
+        type: 'string',
+        title: 'Edge 音色',
+        description: 'Edge 音色短名，例如 zh-CN-XiaoyiNeural；童声 XiaoshuangNeural 只有 Azure 付费接口才有。',
+        'x-hot': true,
+      },
+      [`${K}.speak.edge.rate`]: {
+        type: 'number',
+        title: 'Edge 语速',
+        description: '相对语速百分比：-50 到 100。',
+        minimum: -50,
+        maximum: 100,
+        multipleOf: 1,
+        'x-hot': true,
+      },
+      [`${K}.speak.edge.pitch`]: {
+        type: 'number',
+        title: 'Edge 音调',
+        description: '音调偏移（Hz）：-50 到 50。',
+        minimum: -50,
+        maximum: 50,
+        multipleOf: 1,
         'x-hot': true,
       },
       [`${K}.speak.textLang`]: {

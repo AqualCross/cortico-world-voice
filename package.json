@@ -89,6 +89,7 @@
     "abcjs": "6.7.2",
     "audify": "1.10.1",
     "loopback-capture": "^3.0.2",
+    "msedge-tts": "^2.1.1",
     "onnxruntime-node": "^1.31.1",
     "sherpa-onnx-node": "^1.13.8",
     "spessasynth_core": "4.3.22",

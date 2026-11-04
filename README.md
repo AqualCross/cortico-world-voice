@@ -41,6 +41,7 @@ Owner: `src/definition.ts`
 | `src/banks.ts` | DiffSinger 声库扫描（`dsconfig.yaml`、说话人音色） |
 | `python/diffsinger_worker.py` | DiffSinger 子进程：歌词→音素→自动旋律→五段 onnx 推理 |
 | `src/cloud.ts` | 云端 TTS（DashScope SpeechSynthesizer、OpenAI 兼容 /v1/audio/speech） |
+| `src/edge.ts` | Edge 在线朗读（免密钥，`msedge-tts` 维护协议，输出 mp3） |
 | `src/stt.ts` | 云端转写：DashScope 同步 / 文件转写、OpenAI 兼容 |
 | `src/storage.ts` | 数据根 `<dataDir>/audio/` 与旧布局搬迁 |
 | `src/transcripts.ts` | 转写记录仓库（`audio/transcripts/`，只存文本与元数据） |
@@ -96,7 +97,7 @@ Owner: `src/definition.ts`
 
 ## 「说话」页
 
-五块：说话（本机 gpt-sovits / HTTP DashScope / OpenAI 兼容，切换后只显示对应字段）、变声（RVC）、唱歌（DiffSinger）、播放（音量与队列）、记录（合成语音）。
+五块：说话（默认 Edge 在线，另可切本机 gpt-sovits / HTTP DashScope / OpenAI 兼容，切换后只显示对应字段）、变声（RVC）、唱歌（DiffSinger）、播放（音量与队列）、记录（合成语音）。
 密钥写在部署 `.env`，页面上只填变量名与密钥本身。
 
 变声页：导入 `.pth`（同目录同名 `.index` 一起用）后选一段音频点「转换」，按变调 / 索引率 / 保护清辅音转完自动进播放队列，

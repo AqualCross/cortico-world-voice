@@ -31,7 +31,9 @@ describe('Audio World', () => {
     const text = String(await status.handler({}, {} as ToolCallContext));
     expect(text).toContain('音频播放');
     expect(text).toContain('未接入：');
+    // 默认引擎是免密钥的 Edge，所以「文本转语音」一装上就是已接入。
     expect(text).toContain('文本转语音');
+    expect(text).not.toContain('还没有接入任何引擎');
     expect(text).toContain('监听：没有勾选的来源');
   });
   it('面板顺序：依赖、说话、听、音乐、工具；播放与记录收进说话/听的二级页', async () => {
@@ -255,8 +257,11 @@ describe('Audio World', () => {
       badges?: Array<{ label: string; value: number; tone: string }>;
     };
     expect(ui.lamps?.map((lamp) => lamp.label)).toEqual(['听', '说话', '变声', '唱歌']);
-    expect(ui.lamps?.every((lamp) => lamp.state === 'offline' || lamp.state === 'error')).toBe(true);
-    expect(ui.lamps?.find((lamp) => lamp.label === '变声')?.hint).toContain('还缺');
+    // 默认的 Edge 引擎免密钥、免安装，说话一装上就是 online；其余三项没配好就如实 offline。
+    const lampOf = (label: string): { state: string; hint?: string } | undefined => ui.lamps?.find((lamp) => lamp.label === label);
+    expect(lampOf('说话')).toMatchObject({ state: 'online', hint: 'Edge 在线音色' });
+    for (const label of ['听', '变声', '唱歌']) expect(lampOf(label)?.state).not.toBe('online');
+    expect(lampOf('变声')?.hint).toContain('还缺');
     expect(ui.badges).toEqual([]);
     const en = world.webUi!('en') as unknown as { lamps?: Array<{ label: string }> };
     expect(en.lamps?.map((lamp) => lamp.label)).toEqual(['Listen', 'Speech', 'Convert', 'Sing']);
@@ -312,14 +317,17 @@ describe('Audio World', () => {
   });
 
   it('audio_say 的 silent 也立刻回执，失败以事件带回', async () => {
-    const world = AUDIO.create(fakeWorldContext(AUDIO, { scratchDir }));
+    // 默认 Edge 会真的联网；这里换成没填密钥的 DashScope，让失败路径确定地发生。
+    const ctx = fakeWorldContext(AUDIO, { scratchDir });
+    ctx.cfg.speak = { ...ctx.cfg.speak, engine: 'dashscope' };
+    const world = AUDIO.create(ctx);
     const host = new FakeHost();
     (world as unknown as { host: FakeHost }).host = host;
     const say = world.tools().find((tool) => tool.name === 'audio_say')!;
     const text = String(await say.handler({ text: '你好', silent: true }, {} as ToolCallContext));
     expect(text).toContain('后台开始合成');
     expect(text).toContain('audio.say_done');
-    // 默认引擎没配参考音频：这一句合成失败，错误等后台推成事件。
+    // 引擎没有密钥：这一句合成失败，错误等后台推成事件。
     for (let i = 0; i < 100 && !host.events.some((event) => event.type === 'audio.failed'); i += 1) {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }

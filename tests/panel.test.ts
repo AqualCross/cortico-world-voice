@@ -280,6 +280,7 @@ describe('说话页', () => {
   const speakState = {
     speak: {
       engine: 'gpt-sovits', textLang: 'auto',
+      edge: { voice: 'zh-CN-XiaoyiNeural', rate: 0, pitch: 0 },
       gptSovits: { tier: 'auto', refAudio: '', refText: '', speed: 1 },
       dashscope: { baseUrl: 'https://maas.qianwenaiapi.com', model: 'qwen-audio-3.1-tts-flash', voice: 'longanhuan_v3.1', apiKeySecret: 'AUDIO_API_KEY', format: 'wav', sampleRate: 24000, instruction: '', languageHints: '', seed: -1 },
       openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini-tts', voice: 'alloy', apiKeySecret: 'OPENAI_API_KEY', format: 'wav', sampleRate: 0, languageHints: '' },
@@ -435,6 +436,26 @@ describe('说话页', () => {
     const text = root.textContent ?? '';
     expect(text).toContain('接口地址');
     expect(text).not.toContain('参考音频');
+  });
+
+  it('切到 Edge 显示音色、语速、音调，并提示需要联网', async () => {
+    const { root, calls } = await mount();
+    const selects = Array.from(root.querySelectorAll('select')) as HTMLSelectElement[];
+    const engine = selects.find((s) => Array.from(s.options).some((o) => o.value === 'edge'))!;
+    engine.value = 'edge';
+    engine.dispatchEvent(new Event('change'));
+    expect(calls.some((c) => c.startsWith('setConfigValue:worlds.audio.speak.engine'))).toBe(true);
+    const text = root.textContent ?? '';
+    expect(text).toContain('语速');
+    expect(text).toContain('语速');
+    expect(text).toContain('音调');
+    expect(text).not.toContain('参考音频');
+    const voice = Array.from(root.querySelectorAll('input')).find((input) => (input as HTMLInputElement).value === 'zh-CN-XiaoyiNeural');
+    expect(voice).toBeTruthy();
+    // 读数框是 number 输入，带单位的字符串会被浏览器清空：所有滑杆读数都只能是纯数字。
+    const readouts = Array.from(root.querySelectorAll('input.sp-value')) as HTMLInputElement[];
+    expect(readouts.length).toBeGreaterThanOrEqual(2);
+    for (const readout of readouts) expect(readout.value).not.toBe('');
   });
 });
 

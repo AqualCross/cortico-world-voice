@@ -4,6 +4,8 @@
   [RtAudio](https://github.com/thestk/rtaudio) (BSD-3-Clause) internally.
 - **diffsinger-utau** (MIT, PyPI) — the DiffSinger/OpenUtau inference library behind
   `python/diffsinger_worker.py`; it brings onnxruntime and torch itself.
+- **msedge-tts** (MIT) — the maintained Edge online text-to-speech client behind
+  `src/edge.ts`; it owns the trusted token and the `Sec-MS-GEC` handshake.
 - **ffmpeg** — not bundled. The player decodes through a local `ffmpeg.exe`
   (detected, or downloaded by the 依赖 page, BtbN's Windows build).
 - Model files downloaded by the 依赖 page keep their upstream licenses:

@@ -18,6 +18,7 @@ import { runMusicCommand } from './music-command.ts';
 import { convertLongAudio } from './rvc-long.ts';
 import { FIRERED_VAD_FILES, PARAFORMER_FILES, SENSEVOICE_FILES, TIER_SPECS } from './catalog.ts';
 import { synthesizeCloud } from './cloud.ts';
+import { synthesizeEdge } from './edge.ts';
 import { GptSovitsService, gptSovitsMissing, type GptSovitsSetup } from './gpt-sovits.ts';
 import { formatFromName, transcribeDashscope, transcribeDashscopeAsync, transcribeOpenai } from './stt.ts';
 import { ClipsStore, type ClipRecord } from './clips.ts';
@@ -545,9 +546,9 @@ export class AudioWorld implements World {
   /** 此刻的接入状态；引擎接入时在这里改。 */
   capabilities(): CapabilityState {
     const cfg = this.opts.cfg;
-    const speakKey = cfg.speak.engine === 'dashscope' ? cfg.speak.dashscope.apiKeySecret : cfg.speak.openai.apiKeySecret;
+    const speakKey = cfg.speak.engine === 'dashscope' ? cfg.speak.dashscope.apiKeySecret : cfg.speak.engine === 'openai' ? cfg.speak.openai.apiKeySecret : '';
     const sttKey = cfg.stt.engine === 'openai' ? cfg.stt.openai.apiKeySecret : cfg.stt.dashscope.apiKeySecret;
-    const cloudSpeak = cfg.speak.engine !== 'gpt-sovits' && !!this.opts.secret(speakKey).trim();
+    const cloudSpeak = cfg.speak.engine === 'edge' || (cfg.speak.engine !== 'gpt-sovits' && !!speakKey && !!this.opts.secret(speakKey).trim());
     const cloudStt = cfg.stt.engine !== 'sensevoice' && cfg.stt.engine !== 'moonshine' && !!this.opts.secret(sttKey).trim();
     const localStt = cfg.stt.engine === 'sensevoice' && existsSync(envPython(asrEnvDir(this.roots))) && existsSync(join(this.sensevoiceModelDir(), 'model.int8.onnx'));
     const localSpeak = cfg.speak.engine === 'gpt-sovits' && !!cfg.speak.gptSovits.refAudio.trim() && gptSovitsMissing(this.sovitsSetup()).length === 0;
@@ -639,11 +640,14 @@ export class AudioWorld implements World {
       ? { state: up.length ? 'online' : 'offline', hint: up.length ? `${up.length} 路在听` : '没有勾选的来源' }
       : { state: bad || !module.ok ? 'error' : 'offline', hint: bad?.error || module.error };
     const speak = this.capabilities().speak;
-    const speakHint = speak
-      ? (this.opts.cfg.speak.engine === 'gpt-sovits' ? '本机 GPT-SoVITS 就绪' : '已填密钥')
-      : this.opts.cfg.speak.engine === 'gpt-sovits'
-        ? (gptSovitsMissing(this.sovitsSetup()).length ? `还缺 ${gptSovitsMissing(this.sovitsSetup()).join('、')}` : '还没选参考音频')
-        : '还没填密钥';
+    const engine = this.opts.cfg.speak.engine;
+    const speakHint = engine === 'edge'
+      ? 'Edge 在线音色'
+      : speak
+        ? (engine === 'gpt-sovits' ? '本机 GPT-SoVITS 就绪' : '已填密钥')
+        : engine === 'gpt-sovits'
+          ? (gptSovitsMissing(this.sovitsSetup()).length ? `还缺 ${gptSovitsMissing(this.sovitsSetup()).join('、')}` : '还没选参考音频')
+          : '还没填密钥';
     const rvc = this.rvcRuntime();
     const sing = this.singRuntime();
     return {
@@ -2025,7 +2029,7 @@ export class AudioWorld implements World {
     };
   }
 
-  /** 合成一句：本机 GPT-SoVITS 或云端引擎。 */
+  /** 合成一句：Edge 在线、本机 GPT-SoVITS 或云端引擎。 */
   private async speakOnce(
     text: string,
     voice?: string,
@@ -2033,6 +2037,12 @@ export class AudioWorld implements World {
   ): Promise<{ wav: Buffer; engine: string; format: string; voice: string; model: string }> {
     const cfg = this.opts.cfg;
     const engine = cfg.speak.engine;
+    if (engine === 'edge') {
+      const e = cfg.speak.edge;
+      const usedVoice = voice?.trim() || e.voice.trim();
+      const bytes = await synthesizeEdge({ text, voice: usedVoice, rate: e.rate, pitch: e.pitch });
+      return { wav: bytes, engine: 'edge', format: 'mp3', voice: usedVoice, model: 'Edge TTS' };
+    }
     if (engine === 'gpt-sovits') {
       const g = cfg.speak.gptSovits;
       const item = this.timbre.get(g.refAudio.split(/[\\/]/).pop() ?? '');
@@ -2161,8 +2171,8 @@ export class AudioWorld implements World {
               // 音频按 Core 的附件契约入 session：句柄随事件交给模型，别的插件用同一个句柄取回这段音频。
               blobs: [{
                 bytes: out.wav,
-                mime: 'audio/wav',
-                name: `${clip.id}.wav`,
+                mime: clip.mime,
+                name: `${clip.id}.${clip.ext}`,
                 fallbackText: '这段语音的音频文件；把这个句柄交给别的插件（例如 QQ 语音参数）即可发送同一段音频。',
               }],
             }, { deliver: true }).catch(() => {});

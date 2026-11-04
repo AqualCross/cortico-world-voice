@@ -46,8 +46,9 @@ interface LastConvert {
 
 interface SpeakState {
   speak: {
-    engine: 'gpt-sovits' | 'dashscope' | 'openai';
+    engine: 'edge' | 'gpt-sovits' | 'dashscope' | 'openai';
     textLang: string;
+    edge: { voice: string; rate: number; pitch: number };
     gptSovits: { tier: string; refAudio: string; refText: string; speed: number };
     dashscope: {
       baseUrl: string; model: string; voice: string; apiKeySecret: string;
@@ -91,6 +92,8 @@ const TEXT = {
     speed: '语速',
     model: '模型',
     voice: '音色',
+    edgeRate: '语速',
+    edgePitch: '音调',
     baseUrl: '接口地址',
     dashscopeBase: 'DashScope 地址',
     keyName: '密钥变量名',
@@ -154,6 +157,8 @@ const TEXT = {
     speed: 'Speed',
     model: 'Model',
     voice: 'Voice',
+    edgeRate: 'Rate',
+    edgePitch: 'Pitch',
     baseUrl: 'Base URL',
     dashscopeBase: 'DashScope base URL',
     keyName: 'Secret name',
@@ -228,6 +233,7 @@ let singLyrics = '';
 
 const ENGINES = {
   speak: [
+    { value: 'edge', label: { zh: 'edge朗读', en: 'Edge read-aloud' } },
     { value: 'gpt-sovits', label: { zh: '本机 GPT-SoVITS', en: 'Local GPT-SoVITS' } },
     { value: 'dashscope', label: { zh: 'HTTP · DashScope', en: 'HTTP · DashScope' } },
     { value: 'openai', label: { zh: 'HTTP · OpenAI 兼容', en: 'HTTP · OpenAI-compatible' } },
@@ -430,7 +436,7 @@ export const speakPanel: WebUiPanel = {
 .aud-switch.on { background: var(--accent, #5b7cfa); }
 .aud-switch.on::after { transform: translateX(16px); }
 .aud-switch:focus-visible { outline: 2px solid var(--accent, #5b7cfa); outline-offset: 2px; }
-.aud-tabs { display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1px solid rgba(128,128,128,.25); margin: 4px 0 12px; max-width: 900px; }
+.aud-tabs { position: sticky; top: 0; z-index: 5; display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1px solid rgba(128,128,128,.25); background: var(--background, var(--paper, #fbfbfb)); margin: 0 0 12px; padding-top: 4px; max-width: 900px; }
 .aud-tab { font: inherit; font-size: 13px; background: none; border: 0; color: inherit; opacity: .62; padding: 6px 10px 8px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
 .aud-tab:hover { opacity: .85; }
 .aud-tab.on { opacity: 1; font-weight: 600; border-bottom-color: var(--accent, #5b7cfa); }
@@ -515,7 +521,12 @@ export const speakPanel: WebUiPanel = {
       pane.append(field(t.textLang, choose(ENGINES.lang, state.speak.textLang, (v) => save('speak.textLang', v, true))));
       const detail = el('div');
       pane.append(detail);
-      if (state.speak.engine === 'gpt-sovits') {
+      if (state.speak.engine === 'edge') {
+        const e = state.speak.edge;
+        detail.append(field(t.voice, textInput(e.voice, (v) => save('speak.edge.voice', v))));
+        detail.append(field(t.edgeRate, slider(e.rate, { min: -50, max: 100, step: 5 }, (v) => save('speak.edge.rate', v), (v) => String(v))));
+        detail.append(field(t.edgePitch, slider(e.pitch, { min: -50, max: 50, step: 1 }, (v) => save('speak.edge.pitch', v), (v) => String(v))));
+      } else if (state.speak.engine === 'gpt-sovits') {
         const g = state.speak.gptSovits;
         const gpus = state.gpus ?? [];
         const tierOptions = [
