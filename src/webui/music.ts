@@ -9,7 +9,9 @@ interface MusicState { separator: JobState; ffmpeg: boolean; tasks: MusicTask[] 
 
 const STYLE = `
 .audio-music [hidden] { display:none!important; }
-.audio-music .aud-tabs { display:flex; flex-wrap:wrap; gap:4px; border-bottom:1px solid rgba(128,128,128,.25); margin:4px 0 12px; }
+.audio-music .aud-tabs { display:flex; flex-wrap:wrap; gap:4px; border-bottom:1px solid rgba(128,128,128,.25); }
+.audio-music > .aud-tabs { position:sticky; top:0; z-index:5; background:var(--background,var(--paper,#fbfbfb)); margin:0 0 12px; padding-top:4px; }
+.audio-music .music-pane .aud-tabs { margin:4px 0 12px; }
 .audio-music .aud-tab { font:inherit; font-size:13px; background:none; border:0; color:inherit; opacity:.62; padding:6px 10px 8px; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; }
 .audio-music .aud-tab:hover { opacity:.85; }
 .audio-music .aud-tab.on { opacity:1; font-weight:600; border-bottom-color:var(--accent,#5b7cfa); }

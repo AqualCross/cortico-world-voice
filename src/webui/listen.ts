@@ -245,7 +245,7 @@ const SRC_STYLE = `
 .aud-switch:focus-visible { outline: 2px solid var(--accent, #5b7cfa); outline-offset: 2px; }
 .aud-src-error { grid-column: 2 / -1; font-size: 11px; line-height: 1.5; color: #d9534f; opacity: .9; word-break: break-word; }
 .aud-note { font-size: 12px; line-height: 1.6; opacity: .7; margin: 2px 0 4px; }
-.aud-tabs { display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1px solid rgba(128,128,128,.25); margin: 4px 0 12px; max-width: 900px; }
+.aud-tabs { position: sticky; top: 0; z-index: 5; display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1px solid rgba(128,128,128,.25); background: var(--background, var(--paper, #fbfbfb)); margin: 0 0 12px; padding-top: 4px; max-width: 900px; }
 .aud-tab { font: inherit; font-size: 13px; background: none; border: 0; color: inherit; opacity: .62; padding: 6px 10px 8px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
 .aud-tab:hover { opacity: .85; }
 .aud-tab.on { opacity: 1; font-weight: 600; border-bottom-color: var(--accent, #5b7cfa); }
