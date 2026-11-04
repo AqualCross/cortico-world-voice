@@ -32,6 +32,16 @@ describe('流式合成缓冲', () => {
     expect(buffer.bytes()).toEqual(Buffer.from([1, 2, 3]));
   });
 
+  it('记下开始合成的时间，供首音日志算耗用', () => {
+    const buffer = new BufferedSpeech(async () => info((async function* () {
+      yield Buffer.from([1]);
+    })()));
+    expect(buffer.startedAtMs).toBe(0);
+    const before = Date.now();
+    buffer.start(new AbortController().signal);
+    expect(buffer.startedAtMs).toBeGreaterThanOrEqual(before);
+  });
+
   it('合成失败时把错误交给播放侧', async () => {
     const buffer = new BufferedSpeech(async () => info((async function* () {
       yield Buffer.from([1]);

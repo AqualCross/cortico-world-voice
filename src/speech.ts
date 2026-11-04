@@ -53,11 +53,17 @@ export class BufferedSpeech {
   private signal: AbortSignal | null = null;
   private wake: (() => void) | null = null;
   private iterator: AsyncIterator<Buffer> | null = null;
+  private startedAt = 0;
 
   constructor(private readonly open: (signal: AbortSignal) => Promise<SpeechStream>) {}
 
   get speech(): SpeechStream | null {
     return this.info;
+  }
+
+  /** 开始合成的时间（毫秒时间戳）；没开始过是 0。 */
+  get startedAtMs(): number {
+    return this.startedAt;
   }
 
   /** 已收到的编码字节；播放结束后就是完整的一条。 */
@@ -69,6 +75,7 @@ export class BufferedSpeech {
   start(signal: AbortSignal): void {
     if (this.state !== 'idle') return;
     this.signal = signal;
+    this.startedAt = Date.now();
     this.state = 'opening';
     void this.pump(signal);
   }

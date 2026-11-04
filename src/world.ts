@@ -2204,6 +2204,22 @@ export class AudioWorld implements World {
   /** 放一条已缓冲的语音：本机 PCM 路径边解边放，缺依赖就收齐再走系统播放器。 */
   private async playSpeech(buffer: BufferedSpeech, opts: PlayOptions): Promise<number | null> {
     buffer.start(opts.signal);
+    const playStarted = Date.now();
+    let firstLogged = false;
+    // 首音计时只写 core.log（worlds.audio），不推事件、不碰面板。
+    const logFirstAudio = (mode: 'stream' | 'buffered'): void => {
+      if (firstLogged) return;
+      firstLogged = true;
+      const now = Date.now();
+      this.host?.log.info('说话首音', {
+        engine: buffer.speech?.engine ?? '?',
+        mode,
+        /** 这一条开始播放 → 第一块声音；排队时就是听感上的等待。 */
+        ms: now - playStarted,
+        /** 开始合成 → 第一块声音（预取时包含等待时间）。 */
+        synthMs: buffer.startedAtMs ? now - buffer.startedAtMs : undefined,
+      });
+    };
     const audify = loadAudify();
     const ffmpeg = (await this.ffmpegInfo()).path;
     if (audify && ffmpeg) {
@@ -2211,8 +2227,14 @@ export class AudioWorld implements World {
       const onAbort = (): void => output.cut();
       opts.signal.addEventListener('abort', onAbort, { once: true });
       try {
+        const chunks = (async function* () {
+          for await (const chunk of buffer.chunks(opts.signal)) {
+            if (chunk.length) logFirstAudio('stream');
+            yield chunk;
+          }
+        })();
         const played = await playStream({
-          chunks: buffer.chunks(opts.signal),
+          chunks,
           volume: opts.volume,
           balance: opts.balance,
           signal: opts.signal,
@@ -2232,6 +2254,7 @@ export class AudioWorld implements World {
     if (!info) throw new Error('合成没有返回音频。');
     const file = this.scratch(`say-${Date.now()}-${++this.sayFileSeq}.${info.format}`);
     writeFileSync(file, info.format === 'wav' ? patchWavSizes(buffer.bytes()) : buffer.bytes());
+    logFirstAudio('buffered');
     try {
       await playFile({ path: file, volume: opts.volume, balance: opts.balance, signal: opts.signal });
     } finally {
