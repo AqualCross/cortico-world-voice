@@ -321,7 +321,7 @@ describe('说话页', () => {
         if (method === 'queue') {
           const act = String(args?.[0] ?? '');
           if (act === 'subtitle') return { enabled: true, size: 34, color: '#FFFFFF', vertical: 'bottom', align: 'center' };
-          return { current: null, pending: [], counts: { current: 0, pending: 0 }, volume: 80, lastError: null };
+          return { current: null, pending: [], counts: { current: 0, pending: 0 }, volume: 80, balance: 0, lastError: null };
         }
         if (method === 'clips') return { transcripts: { count: 0, items: [] }, clips: { count: 0, items: [] } };
         calls.push(String(method) + (args ? ':' + String(args[0]) : ''));
@@ -745,10 +745,11 @@ describe('工具页', () => {
 
 describe('队列页', () => {
   const snap = {
-    current: { id: 'q1', shown: 'a.wav', ref: 'D:/a.wav', volume: 80, origin: 'tool', position: 0, elapsedSec: 3 },
-    pending: [{ id: 'q2', shown: 'b.wav', ref: 'D:/b.wav', volume: 80, origin: 'tool', position: 1, elapsedSec: 0 }],
+    current: { id: 'q1', shown: 'a.wav', ref: 'D:/a.wav', volume: 80, balance: -20, origin: 'tool', position: 0, elapsedSec: 3 },
+    pending: [{ id: 'q2', shown: 'b.wav', ref: 'D:/b.wav', volume: 80, balance: 0, origin: 'tool', position: 1, elapsedSec: 0 }],
     counts: { current: 1, pending: 1 },
     volume: 80,
+    balance: 0,
     lastError: null,
   };
 
@@ -811,6 +812,17 @@ describe('队列页', () => {
     return root;
   };
 
+  it('左右平衡滑杆回显配置并写回', async () => {
+    const calls: unknown[][] = [];
+    const root = await mountQueue(snap, calls);
+    expect(root.textContent).toContain('左右平衡');
+    const balance = root.querySelector('input.aq-balance') as HTMLInputElement;
+    expect(balance.value).toBe('0');
+    balance.value = '-30';
+    balance.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(calls).toContainEqual(['setConfigValue', 'worlds.audio.balance', -30]);
+  });
+
   it('字幕设置按当前样式铺开：开关、字号、颜色、位置与预览', async () => {
     const root = await mountQueue(snap);
     const text = root.textContent ?? '';
@@ -824,7 +836,7 @@ describe('队列页', () => {
     const selects = Array.from(root.querySelectorAll('select')) as HTMLSelectElement[];
     expect(selects[0].value).toBe('top');
     expect(selects[1].value).toBe('right');
-    const size = root.querySelector('input[type="range"]:not(.aq-volume)') as HTMLInputElement;
+    const size = root.querySelector('input[type="range"]:not(.aq-volume):not(.aq-balance)') as HTMLInputElement;
     expect(size.value).toBe('34');
   });
 

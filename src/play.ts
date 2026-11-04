@@ -13,6 +13,8 @@ export interface PlayOptions {
   path: string;
   /** 0–100。 */
   volume: number;
+  /** -100（全左）… 100（全右）；缺省居中。 */
+  balance?: number;
   /** 超过这个时间强制结束，防止坏文件挂住队列。 */
   timeoutMs?: number;
   signal: AbortSignal;
@@ -37,7 +39,7 @@ const EXIT: Readonly<Record<number, [PlayFailure, string]>> = {
 
 /** 播完才 resolve；失败抛 PlaybackError。 */
 export function playFile(opts: PlayOptions): Promise<void> {
-  const { path, volume, timeoutMs = 30 * 60_000, signal } = opts;
+  const { path, volume, balance = 0, timeoutMs = 30 * 60_000, signal } = opts;
   return new Promise((resolve, reject) => {
     if (signal.aborted) {
       reject(new PlaybackError('aborted', '已取消'));
@@ -51,6 +53,7 @@ export function playFile(opts: PlayOptions): Promise<void> {
         '-File', PLAY_PS1,
         '-Path', path,
         '-Volume', String(Math.max(0, Math.min(100, Math.round(volume)))),
+        '-Balance', String(Math.max(-100, Math.min(100, Math.round(balance)))),
         '-TimeoutMs', String(Math.max(1000, timeoutMs)),
       ], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     } catch (err) {
@@ -95,13 +98,14 @@ export interface StreamPlayOptions extends PlayOptions {
  * ffmpeg 不存在或解码失败时抛错，调用方可以退回 playFile（PowerShell）。
  */
 export async function playFileStream(opts: StreamPlayOptions): Promise<void> {
-  const { path, volume, signal, ffmpeg, output } = opts;
+  const { path, volume, balance = 0, signal, ffmpeg, output } = opts;
   const gain = Math.max(0, Math.min(1, volume / 100));
+  const pan = Math.max(-1, Math.min(1, balance / 100));
   await output.write(48_000, Buffer.alloc(0)); // 先把输出按 48k 打开，省掉首块前的设备启动
   try {
     for await (const chunk of decodePcm(ffmpeg, path, signal)) {
       if (signal.aborted) throw new PlaybackError('aborted', '已取消');
-      await output.write(48_000, chunk, gain);
+      await output.write(48_000, chunk, gain, pan);
     }
   } catch (err) {
     if (signal.aborted) throw new PlaybackError('aborted', '已取消');

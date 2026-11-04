@@ -102,8 +102,12 @@ describe('Audio World', () => {
     const volume = await invoke('queue', 'setConfigValue', ['worlds.audio.volume', '65']);
     expect(volume).toEqual({ ok: true, key: 'worlds.audio.volume', value: 65 });
 
+    const balance = await invoke('queue', 'setConfigValue', ['worlds.audio.balance', '-45']);
+    expect(balance).toEqual({ ok: true, key: 'worlds.audio.balance', value: -45 });
+
     await expect(invoke('speak', 'setConfigValue', ['worlds.audio.nope', 1])).rejects.toThrow('未知配置项');
     await expect(invoke('speak', 'setConfigValue', ['worlds.audio.volume', 500])).rejects.toThrow('不能大于');
+    await expect(invoke('queue', 'setConfigValue', ['worlds.audio.balance', -500])).rejects.toThrow('不能小于');
     await expect(invoke('listen', 'setConfigValue', ['worlds.audio.stt.dashscope.itn', 'yes'])).rejects.toThrow('要布尔值');
   });
 
@@ -307,6 +311,28 @@ describe('Audio World', () => {
     const state = await invoke('records', 'state', []) as { transcripts: { count: number } };
     expect(state.transcripts.count).toBe(1);
     await world.stop();
+  });
+
+  it('audio_play 把左右平衡带进队列并掐到 -100…100', async () => {
+    const world = AUDIO.create(fakeWorldContext(AUDIO, { scratchDir }));
+    // 播放挂起，队列停在当前条目上，方便看它拿到的平衡值。
+    (world as unknown as { playAny: () => Promise<void> }).playAny = () => new Promise<void>(() => {});
+    const file = join(scratchDir, 'pan.wav');
+    writeFileSync(file, Buffer.from('RIFF0000WAVE'));
+    const play = world.tools().find((tool) => tool.name === 'audio_play')!;
+    await play.handler({ path: file, balance: 140 }, {} as ToolCallContext);
+    const snap = (world as unknown as { queue: { snapshot(): { current: { balance: number } | null } } }).queue.snapshot();
+    expect(snap.current?.balance).toBe(100);
+  });
+
+  it('audio_say 把左右平衡记到这一句上并掐到范围内', async () => {
+    const world = AUDIO.create(fakeWorldContext(AUDIO, { scratchDir }));
+    // 占住合成循环，让这一句留在待合成列表里，不真的去合成。
+    const inner = world as unknown as { speakBusy: boolean; speakJobs: Array<{ balance?: number }> };
+    inner.speakBusy = true;
+    const say = world.tools().find((tool) => tool.name === 'audio_say')!;
+    await say.handler({ text: '你好', balance: -180 }, {} as ToolCallContext);
+    expect(inner.speakJobs[0]?.balance).toBe(-100);
   });
 
   it('audio_say 立刻回执，不等合成', async () => {

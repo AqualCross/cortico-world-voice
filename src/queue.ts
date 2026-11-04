@@ -3,12 +3,20 @@ import { basename } from 'node:path';
 
 export type QueueOrigin = 'tool' | 'ui' | 'event';
 
+/** 左右平衡统一掐成 -100…100 的整数；认不出的值当居中。 */
+export function clampBalance(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(-100, Math.min(100, Math.round(value)));
+}
+
 export interface QueueRequest {
   path: string;
   /** 面板上显示的名字；缺省用文件名。 */
   shown?: string;
   /** 0–100；缺省用配置里的音量。 */
   volume?: number;
+  /** -100（全左）… 100（全右）；缺省用配置里的平衡。 */
+  balance?: number;
   /** 这条音频说的文字，播放页当字幕用；放文件时没有。 */
   text?: string;
   /** 音频时长（秒）；有字幕时按它算当前说到哪句。 */
@@ -21,6 +29,7 @@ export interface QueueItemView {
   shown: string;
   ref: string;
   volume: number;
+  balance: number;
   origin: QueueOrigin;
   /** 0 是正在播放，1 起是排队顺序。 */
   position: number;
@@ -35,10 +44,11 @@ export interface QueueSnapshot {
   pending: QueueItemView[];
   counts: { current: number; pending: number };
   volume: number;
+  balance: number;
   lastError: string | null;
 }
 
-export type PlayFn = (opts: { path: string; volume: number; signal: AbortSignal }) => Promise<void>;
+export type PlayFn = (opts: { path: string; volume: number; balance: number; signal: AbortSignal }) => Promise<void>;
 
 /** 队列的旁听钩子：字幕层跟着真正开播/收播。 */
 export interface QueueHooks {
@@ -50,6 +60,7 @@ interface Item extends QueueRequest {
   id: string;
   shown: string;
   volume: number;
+  balance: number;
   controller: AbortController;
   startedAt: number;
 }
@@ -64,6 +75,7 @@ export class PlayQueue {
   constructor(
     private readonly play: PlayFn,
     private readonly defaultVolume: () => number,
+    private readonly defaultBalance: () => number = () => 0,
     private readonly hooks: QueueHooks = {},
   ) {}
 
@@ -74,6 +86,7 @@ export class PlayQueue {
       id: `q${++this.seq}`,
       shown: req.shown?.trim() || basename(req.path),
       volume: req.volume ?? this.defaultVolume(),
+      balance: clampBalance(req.balance ?? this.defaultBalance()),
       controller: new AbortController(),
       startedAt: 0,
     };
@@ -90,6 +103,7 @@ export class PlayQueue {
       pending: this.pending.map((item, index) => view(item, index + 1)),
       counts: { current: this.current ? 1 : 0, pending: this.pending.length },
       volume: this.defaultVolume(),
+      balance: clampBalance(this.defaultBalance()),
       lastError: this.lastError,
     };
   }
@@ -100,6 +114,7 @@ export class PlayQueue {
       shown: item.shown,
       ref: item.path,
       volume: item.volume,
+      balance: item.balance,
       origin: item.origin,
       position,
       startedAtMs: item.startedAt,
@@ -162,7 +177,7 @@ export class PlayQueue {
         item.startedAt = Date.now();
         try {
           this.hooks.onStart?.(this.viewOf(item, 0));
-          await this.play({ path: item.path, volume: item.volume, signal: item.controller.signal });
+          await this.play({ path: item.path, volume: item.volume, balance: item.balance, signal: item.controller.signal });
           this.lastError = null;
         } catch (err) {
           // 取消不算失败，只有真的播不出来才留在页面上。

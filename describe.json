@@ -36,6 +36,12 @@
             "minimum": 0,
             "maximum": 100,
             "description": "Volume for this item; defaults to the configured volume."
+          },
+          "balance": {
+            "type": "number",
+            "minimum": -100,
+            "maximum": 100,
+            "description": "Left/right balance for this item: -100 hard left, 0 center, 100 hard right. Defaults to the configured balance."
           }
         }
       },
@@ -62,6 +68,12 @@
           "voice": {
             "type": "string",
             "description": "Optional voice for this line; empty uses the configured one."
+          },
+          "balance": {
+            "type": "number",
+            "minimum": -100,
+            "maximum": 100,
+            "description": "Left/right balance when this line is played: -100 hard left, 0 center, 100 hard right. Defaults to the configured balance."
           },
           "silent": {
             "type": "boolean",

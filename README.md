@@ -55,17 +55,17 @@ Owner: `src/definition.ts`
 
 ## 「说话 → 播放」页
 
-正在播放与排队中的音频，每条带 id、来源、音量、已播秒数；顶部音量滑条立即生效并写回 `worlds.audio.volume`，
+正在播放与排队中的音频，每条带 id、来源、音量、左右平衡、已播秒数；顶部音量与左右平衡滑条写回 `worlds.audio.volume` / `worlds.audio.balance`，
 可跳过当前、按条移除、清空。工具 `audio_play` 入队，`audio_queue` 查看与操作。
 
 ## 工具
 
-- `audio_say`：按当前引擎合成并排队播放；`silent` 不播放，合成完以 `audio.say_done` 事件带回：正文里有本地路径，同时挂一份音频附件（Core 分配的 `log:` 句柄）。失败走 `audio.failed`。
+- `audio_say`：按当前引擎合成并排队播放；`silent` 不播放，合成完以 `audio.say_done` 事件带回：正文里有本地路径，同时挂一份音频附件（Core 分配的 `log:` 句柄）。`balance`（-100–100）可单独指定这一句的左右偏向。失败走 `audio.failed`。
 - `audio_transcribe`：后台转写音频文件（本机 SenseVoice 或云端引擎），文字进「记录 → 转写」并以 `audio.transcribed` 事件带回；失败走 `audio.failed`。
 - `audio_listen`：开始 / 停止 / 查看监听；状态里带每路的电平、块数与最近听到的几句。
 - `audio_convert`：把一段音频换成当前变声音色；立刻回执，成功进语音记录并自动播放；`silent` 不播放，完成以 `audio.convert_done` 带回路径与音频附件句柄。失败走 `audio.failed`。
 - `audio_sing`：把歌词唱出来（DiffSinger）；立刻回执，成功进语音记录并自动播放；`silent` 不播放，完成以 `audio.sing_done` 带回路径与音频附件句柄。失败走 `audio.failed`。
-- `audio_play` / `audio_queue` / `audio_status`：播放队列与状态。播放、变声、转写都接受本地路径或 Core 的 `log:`/`mem:` 附件句柄。
+- `audio_play` / `audio_queue` / `audio_status`：播放队列与状态。`audio_play` 可按条指定音量与左右平衡（`balance`，-100–100）。播放、变声、转写都接受本地路径或 Core 的 `log:`/`mem:` 附件句柄。
 - `audio_separate`：后台把歌曲分成人声与伴奏，完成以 `audio.separated` 带回两个路径。
 - `audio_mix`：按每轨音量（0–200%）与延迟（秒）混合 1–16 条本地音轨，完成以 `audio.mixed` 带回 WAV 路径。
 - `audio_abc_music_score` / `audio_abc_music_play` / `audio_abc_music_control`：沿用 ABC 音乐扩展的工具；事件交付改用 `audio.abc_played`，来源为 `external`。
@@ -97,7 +97,7 @@ Owner: `src/definition.ts`
 
 ## 「说话」页
 
-五块：说话（默认 Edge 在线，另可切本机 gpt-sovits / HTTP DashScope / OpenAI 兼容，切换后只显示对应字段）、变声（RVC）、唱歌（DiffSinger）、播放（音量与队列）、记录（合成语音）。
+五块：说话（默认 Edge 在线，另可切本机 gpt-sovits / HTTP DashScope / OpenAI 兼容，切换后只显示对应字段）、变声（RVC）、唱歌（DiffSinger）、播放（音量、左右平衡与队列）、记录（合成语音）。
 密钥写在部署 `.env`，页面上只填变量名与密钥本身。
 
 变声页：导入 `.pth`（同目录同名 `.index` 一起用）后选一段音频点「转换」，按变调 / 索引率 / 保护清辅音转完自动进播放队列，

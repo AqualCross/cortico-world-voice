@@ -13,6 +13,7 @@
 param(
   [Parameter(Mandatory = $true)][string]$Path,
   [int]$Volume = 80,
+  [int]$Balance = 0,
   [int]$TimeoutMs = 120000
 )
 
@@ -30,6 +31,8 @@ if (-not [System.IO.File]::Exists($Path)) {
 if ($TimeoutMs -lt 1000) { $TimeoutMs = 1000 }
 if ($Volume -lt 0) { $Volume = 0 }
 if ($Volume -gt 100) { $Volume = 100 }
+if ($Balance -lt -100) { $Balance = -100 }
+if ($Balance -gt 100) { $Balance = 100 }
 
 try {
   Add-Type -AssemblyName PresentationCore
@@ -37,6 +40,7 @@ try {
 
   $player = New-Object System.Windows.Media.MediaPlayer
   $player.Volume = $Volume / 100.0
+  $player.Balance = $Balance / 100.0
   $script:opened = $false
   $script:ended = $false
   $script:failed = ''

@@ -17,6 +17,8 @@ export interface AudioConfigSection {
   ffmpegPath: string;
   /** 播放音量，0–100；条目没单独指定时用它。 */
   volume: number;
+  /** 播放左右平衡，-100（全左）… 100（全右），0 居中；条目没单独指定时用它。 */
+  balance: number;
   music: { abc: AbcConfig };
   /** 桌面字幕层：说话时在屏幕上显示一条透明背景的字幕。 */
   subtitle: {
@@ -132,6 +134,7 @@ export const AUDIO_DEFAULTS: AudioConfigSection = {
   uvPath: '',
   ffmpegPath: '',
   volume: 80,
+  balance: 0,
   music: { abc: { instrument: '', delivery: 'event', eventDelivery: 'archive' } },
   subtitle: {
     enabled: true,
@@ -244,6 +247,15 @@ export const AUDIO_CONFIG_GROUP: ConfigGroup = {
         title: '音量',
         description: '播放队列的默认音量（0–100）。',
         minimum: 0,
+        maximum: 100,
+        multipleOf: 1,
+        'x-hot': true,
+      },
+      [`${K}.balance`]: {
+        type: 'number',
+        title: '左右平衡',
+        description: '播放队列的默认左右平衡（-100–100）；0 居中，负数偏左，正数偏右。',
+        minimum: -100,
         maximum: 100,
         multipleOf: 1,
         'x-hot': true,

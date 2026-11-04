@@ -51,15 +51,31 @@ export const OUTPUT_RATE = 48_000;
 export const FRAME_SAMPLES = 480;
 const FRAME_BYTES = FRAME_SAMPLES * OUTPUT_CHANNELS * 2;
 
-/** 16-bit 交错 PCM 乘增益，就地改副本。 */
-export function applyGain(pcm: Buffer, gain: number): Buffer {
-  if (gain === 1) return pcm;
+/** 把 -1（全左）… 1（全右）折成两声道的增益：只压远端，不抬近端，所以不会削波。 */
+export function balanceGains(balance: number): { left: number; right: number } {
+  const pan = Number.isFinite(balance) ? Math.max(-1, Math.min(1, balance)) : 0;
+  return { left: pan > 0 ? 1 - pan : 1, right: pan < 0 ? 1 + pan : 1 };
+}
+
+/** 16-bit 交错立体声乘音量与左右平衡，就地改副本；全居中且音量为 1 时原样返回。 */
+export function scalePcm(pcm: Buffer, gain = 1, balance = 0): Buffer {
+  const sides = balanceGains(balance);
+  const leftGain = gain * sides.left;
+  const rightGain = gain * sides.right;
+  if (leftGain === 1 && rightGain === 1) return pcm;
   const out = Buffer.from(pcm);
-  for (let at = 0; at + 1 < out.length; at += 2) {
-    const value = Math.round(out.readInt16LE(at) * gain);
-    out.writeInt16LE(Math.max(-32768, Math.min(32767, value)), at);
+  for (let at = 0; at + 3 < out.length; at += 4) {
+    const left = Math.round(out.readInt16LE(at) * leftGain);
+    const right = Math.round(out.readInt16LE(at + 2) * rightGain);
+    out.writeInt16LE(Math.max(-32768, Math.min(32767, left)), at);
+    out.writeInt16LE(Math.max(-32768, Math.min(32767, right)), at + 2);
   }
   return out;
+}
+
+/** 只看音量，立体声；保留给解码测试。 */
+export function applyGain(pcm: Buffer, gain: number): Buffer {
+  return scalePcm(pcm, gain, 0);
 }
 
 export class PcmOutput {
@@ -68,6 +84,8 @@ export class PcmOutput {
   private frameBytes = FRAME_BYTES;
   private carry = Buffer.alloc(0);
   private endsAt = 0;
+  private lastGain = 1;
+  private lastBalance = 0;
 
   constructor(
     private readonly audify: AudifyModule,
@@ -78,8 +96,8 @@ export class PcmOutput {
     return this.rt !== null && Date.now() < this.endsAt;
   }
 
-  /** 写一段交错立体声 PCM；采样率变了先等前面的播完再重开流。 */
-  async write(sampleRate: number, pcm: Buffer, gain = 1): Promise<void> {
+  /** 写一段交错立体声 PCM；balance 是 -1（全左）… 1（全右）。采样率变了先等前面的播完再重开流。 */
+  async write(sampleRate: number, pcm: Buffer, gain = 1, balance = 0): Promise<void> {
     if (this.rt && sampleRate !== this.rate) {
       await this.drain();
       this.close();
@@ -87,20 +105,23 @@ export class PcmOutput {
     if (!this.rt) this.open(sampleRate);
     const rt = this.rt!;
     rt.outputVolume = Math.max(0, Math.min(1, this.volume() / 100));
-    const scaled = applyGain(pcm, gain);
-    const merged = this.carry.length ? Buffer.concat([this.carry, scaled]) : scaled;
+    this.lastGain = gain;
+    this.lastBalance = balance;
+    // 先和 carry 拼起来再按整帧缩放：块边界切开的左右采样对不会被错位处理。
+    const merged = this.carry.length ? Buffer.concat([this.carry, pcm]) : pcm;
     const whole = merged.length - (merged.length % this.frameBytes);
-    for (let at = 0; at < whole; at += this.frameBytes) rt.write(merged.subarray(at, at + this.frameBytes));
+    const scaled = scalePcm(merged.subarray(0, whole), gain, balance);
+    for (let at = 0; at < whole; at += this.frameBytes) rt.write(scaled.subarray(at, at + this.frameBytes));
     this.carry = Buffer.from(merged.subarray(whole));
     const seconds = whole / (this.rate * OUTPUT_CHANNELS * 2);
     this.endsAt = Math.max(this.endsAt, Date.now()) + seconds * 1000;
   }
 
-  /** 一句写完：尾巴补静音成一帧再写。 */
+  /** 一句写完：尾巴先按本条的音量与平衡缩放，再补静音成一帧。 */
   flush(): void {
     if (!this.rt || !this.carry.length) return;
     const frame = Buffer.alloc(this.frameBytes);
-    this.carry.copy(frame);
+    scalePcm(this.carry, this.lastGain, this.lastBalance).copy(frame);
     this.rt.write(frame);
     this.endsAt = Math.max(this.endsAt, Date.now()) + 10;
     this.carry = Buffer.alloc(0);
@@ -129,6 +150,8 @@ export class PcmOutput {
       this.rate = 0;
       this.carry = Buffer.alloc(0);
       this.endsAt = 0;
+      this.lastGain = 1;
+      this.lastBalance = 0;
     }
   }
 

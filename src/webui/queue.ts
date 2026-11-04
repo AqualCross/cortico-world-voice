@@ -10,6 +10,7 @@ interface QueueItemView {
   shown: string;
   ref: string;
   volume: number;
+  balance: number;
   origin: string;
   position: number;
   elapsedSec: number;
@@ -20,6 +21,7 @@ interface QueueSnapshot {
   pending: QueueItemView[];
   counts: { current: number; pending: number };
   volume: number;
+  balance: number;
   lastError: string | null;
 }
 
@@ -93,6 +95,47 @@ export const queuePanel: WebUiPanel = {
       slider.value = String(clamped);
       readout.value = String(clamped);
       saveVolume();
+    });
+
+    const balance = ui.h('input', null);
+    balance.type = 'range';
+    balance.min = '-100';
+    balance.max = '100';
+    balance.step = '5';
+    balance.value = '0';
+    balance.className = 'aq-balance';
+    const balanceReadout = ui.input({ type: 'number', value: '0' });
+    balanceReadout.className = 'sp-value';
+    balanceReadout.min = '-100';
+    balanceReadout.max = '100';
+    balanceReadout.step = '5';
+    const balanceRow = ui.h('div', 'sp-row');
+    const balanceSlider = ui.h('div', 'sp-slider');
+    balanceSlider.append(balance, balanceReadout);
+    balanceRow.append(ui.h('span', 'sp-label', '左右平衡'), balanceSlider);
+    ctx.root.append(balanceRow);
+
+    const saveBalance = (): void => {
+      ctx.timeout(() => {
+        void ctx.invoke('setConfigValue', ['worlds.audio.balance', Number(balance.value)]).catch((err: unknown) => {
+          ui.toast(`平衡没保存：${err instanceof Error ? err.message : String(err)}`, 'bad');
+        });
+      }, 350);
+    };
+    balance.addEventListener('input', () => {
+      balanceReadout.value = balance.value;
+      saveBalance();
+    });
+    balanceReadout.addEventListener('change', () => {
+      const next = Number(balanceReadout.value);
+      if (!Number.isFinite(next)) {
+        balanceReadout.value = balance.value;
+        return;
+      }
+      const clamped = Math.min(100, Math.max(-100, Math.round(next)));
+      balance.value = String(clamped);
+      balanceReadout.value = String(clamped);
+      saveBalance();
     });
 
     const errorLine = ui.msgline('');
@@ -241,7 +284,7 @@ export const queuePanel: WebUiPanel = {
     }
 
     function itemCard(item: QueueItemView, isCurrent: boolean): HTMLElement {
-      const sheet = ui.sheet({ title: item.shown, desc: `${item.id} · ${ORIGIN[item.origin] ?? item.origin} · 音量 ${item.volume}` });
+      const sheet = ui.sheet({ title: item.shown, desc: `${item.id} · ${ORIGIN[item.origin] ?? item.origin} · 音量 ${item.volume} · 平衡 ${item.balance}` });
       if (isCurrent) sheet.el.classList.add('aq-current');
       const row = ui.rowbar();
       row.append(ui.pill(isCurrent ? `已 ${item.elapsedSec} 秒` : `第 ${item.position} 条`, 'plain'));
@@ -254,6 +297,8 @@ export const queuePanel: WebUiPanel = {
     function render(snap: QueueSnapshot): void {
       if (document.activeElement !== slider) slider.value = String(snap.volume);
       if (document.activeElement !== readout) readout.value = slider.value;
+      if (document.activeElement !== balance) balance.value = String(typeof snap.balance === 'number' ? snap.balance : 0);
+      if (document.activeElement !== balanceReadout) balanceReadout.value = balance.value;
       errorLine.hidden = !snap.lastError;
       if (snap.lastError) {
         errorLine.classList.add('bad');

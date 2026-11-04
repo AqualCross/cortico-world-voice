@@ -1,17 +1,20 @@
 import { describe, it, expect } from 'vitest';
-import { PlayQueue } from '../src/queue.ts';
+import { PlayQueue, clampBalance } from '../src/queue.ts';
 
 const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 
 /** 假播放器：每次播放挂起，等测试自己推；abort 时以取消失败退出。 */
-function fakePlayer(): { started: string[]; finish: () => void; play: ConstructorParameters<typeof PlayQueue>[0] } {
+function fakePlayer(): { started: string[]; balances: number[]; finish: () => void; play: ConstructorParameters<typeof PlayQueue>[0] } {
   const started: string[] = [];
+  const balances: number[] = [];
   const gates: Array<() => void> = [];
   return {
     started,
+    balances,
     finish: () => gates.shift()?.(),
-    play: ({ path, signal }) => new Promise<void>((resolve, reject) => {
+    play: ({ path, balance, signal }) => new Promise<void>((resolve, reject) => {
       started.push(path);
+      balances.push(balance);
       gates.push(resolve);
       signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
     }),
@@ -93,11 +96,30 @@ describe('播放队列', () => {
     queue.clear();
   });
 
+  it('平衡按配置兜底，条目可单独覆盖并掐到范围内', async () => {
+    const fake = fakePlayer();
+    const queue = new PlayQueue(fake.play, () => 80, () => -40);
+    queue.enqueue({ path: 'D:/a.wav', origin: 'tool' });
+    queue.enqueue({ path: 'D:/b.wav', origin: 'tool', balance: 65 });
+    queue.enqueue({ path: 'D:/c.wav', origin: 'tool', balance: 250 });
+    await tick();
+    expect(queue.snapshot().balance).toBe(-40);
+    expect(queue.snapshot().current?.balance).toBe(-40);
+    fake.finish();
+    await tick();
+    expect(fake.balances).toEqual([-40, 65]);
+    fake.finish();
+    await tick();
+    expect(fake.balances).toEqual([-40, 65, 100]);
+    queue.clear();
+    expect(clampBalance(Number.NaN)).toBe(0);
+  });
+
   it('开播和收播都通知字幕层：跳过与播完都会收', async () => {
     const fake = fakePlayer();
     const started: string[] = [];
     const ended: string[] = [];
-    const queue = new PlayQueue(fake.play, () => 80, {
+    const queue = new PlayQueue(fake.play, () => 80, () => 0, {
       onStart: (item) => started.push(`${item.id}:${item.text}`),
       onEnd: (item) => ended.push(item.id),
     });
