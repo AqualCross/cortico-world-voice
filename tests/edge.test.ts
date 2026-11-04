@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { EdgeError, synthesizeEdge, synthesizeEdgeStream, type EdgeModule } from '../src/edge.ts';
+import { EdgeError, EdgeSpeaker, synthesizeEdge, synthesizeEdgeStream, type EdgeModule } from '../src/edge.ts';
 
 interface Recorded {
   meta: Array<[string, string]>;
@@ -60,6 +60,41 @@ describe('Edge 在线朗读', () => {
     expect((await iterator.next()).value).toEqual(Buffer.from([3]));
     expect((await iterator.next()).done).toBe(true);
     expect(recorded.closed).toBe(1);
+  });
+
+  it('同一音色连说复用同一条连接；关掉后下次重连', async () => {
+    const recorded: Recorded = { meta: [], streams: [], closed: 0 };
+    let built = 0;
+    const mod: EdgeModule = {
+      OUTPUT_FORMAT: { AUDIO_24KHZ_48KBITRATE_MONO_MP3: 'audio-24khz-48kbitrate-mono-mp3' },
+      MsEdgeTTS: class {
+        constructor() { built += 1; }
+        async setMetadata(voice: string, format: string): Promise<void> {
+          recorded.meta.push([voice, format]);
+        }
+        toStream(text: string, options: { rate: string; pitch: string }) {
+          recorded.streams.push([text, options.rate, options.pitch]);
+          return { audioStream: (async function* () { yield Uint8Array.from([1]); })() };
+        }
+        close(): void {
+          recorded.closed += 1;
+        }
+      } as unknown as EdgeModule['MsEdgeTTS'],
+    };
+    const speaker = new EdgeSpeaker({ load: () => mod, idleMs: 60_000 });
+    const drain = async (text: string): Promise<void> => {
+      const stream = await speaker.stream({ text, voice: 'zh-CN-XiaoyiNeural' });
+      for await (const _chunk of stream.chunks) { /* 收完 */ }
+    };
+    await drain('一');
+    await drain('二');
+    expect(built).toBe(1);
+    expect(recorded.closed).toBe(0);
+    speaker.close();
+    expect(recorded.closed).toBe(1);
+    await drain('三');
+    expect(built).toBe(2);
+    speaker.close();
   });
 
   it('没有语速/音调时补 +0% / +0Hz', async () => {
