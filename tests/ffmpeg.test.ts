@@ -1,5 +1,8 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { delimiter, join } from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { parseFfmpegVersion, ffmpegKnownPaths } from '../src/ffmpeg.ts';
+import { parseFfmpegVersion, resolveOnPath } from '../src/ffmpeg.ts';
 
 describe('ffmpeg 检测', () => {
   it('从 -version 输出里取版本号', () => {
@@ -8,10 +11,19 @@ describe('ffmpeg 检测', () => {
     expect(parseFfmpegVersion('nonsense')).toBe(null);
   });
 
-  it('常见位置都指向 ffmpeg.exe', () => {
-    const paths = ffmpegKnownPaths({ LOCALAPPDATA: 'C:/Users/x/AppData/Local', ProgramData: 'C:/ProgramData' }, 'C:/Users/x');
-    expect(paths.every((p) => p.endsWith('ffmpeg.exe'))).toBe(true);
-    expect(paths.some((p) => p.includes('WinGet'))).toBe(true);
-    expect(paths).toContain(String.raw`C:\ffmpeg\bin\ffmpeg.exe`);
+  it('PATH 上找到时给出真实路径', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ffmpeg-path-'));
+    try {
+      writeFileSync(join(dir, 'ffmpeg.exe'), '');
+      const env = { PATH: [join(tmpdir(), 'no-such-dir'), dir].join(delimiter), PATHEXT: '.EXE' };
+      expect(resolveOnPath('ffmpeg', env)).toBe(join(dir, 'ffmpeg.exe'));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('PATH 上没有就返回 null，不猜固定目录', () => {
+    expect(resolveOnPath('ffmpeg', { PATH: join(tmpdir(), 'no-such-dir'), PATHEXT: '.EXE' })).toBe(null);
+    expect(resolveOnPath('ffmpeg', {})).toBe(null);
   });
 });

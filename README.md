@@ -140,10 +140,10 @@ SenseVoice 的情感与音频事件（笑声、掌声、背景音乐等）跟正
 ## 「依赖」页
 
 - **显卡**：自动检测型号、显存、驱动，并按显存选推理档；可重新检测。
-- **uv**：优先识别本机已有的（配置项 → PATH → 常见安装位置），找不到才下载官方独立包到
+- **uv**：先看配置，再认 PATH 上的 `uv`（裸名直接用，不解析、不写回）；找不到才下载官方独立包到
   World 数据目录（不写系统 PATH、不改系统环境）。
-- **ffmpeg**：同样先识别本机（PATH、WinGet、chocolatey、`C:fmpegin` 等），缺失可下载静态包，
-  只留 `ffmpeg.exe` 与 `ffprobe.exe`。
+- **ffmpeg**：先看配置，再从 PATH 解析出真实路径（用户装在哪就认哪，不猜目录）；识别到的路径会写回配置。
+  缺失可下载静态包，只留 `ffmpeg.exe` 与 `ffprobe.exe`。
 - **GPT-SoVITS 源码**：按上游 commit 下载到 `<部署根>/runtimes/audio/gpt-sovits/<commit>/`。
 - **GPT-SoVITS 权重**：按当前推理档下载到 `<部署根>/models/audio/gpt-sovits/`，逐个校验大小与 SHA-256。
 - **RVC**：上游源码 + ContentVec / RMVPE 资产（`models/audio/rvc/`），再在项目目录里建自己的 Python 环境（torch 按档位 + 推理依赖）。

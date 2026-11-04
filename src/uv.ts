@@ -1,11 +1,10 @@
-/** uv：先识别本机已有的（配置 → PATH → 常见安装位置），都没有才下载一份到自己目录。 */
+/** uv：先看配置，再认 PATH 上的 uv（裸名直接用），都没有才下载一份到自己目录。 */
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { downloadVerified, extractZip } from './download.ts';
 
-export type UvSource = 'config' | 'path' | 'known' | 'installed';
+export type UvSource = 'config' | 'path' | 'installed';
 
 export interface UvInfo {
   path: string | null;
@@ -13,18 +12,6 @@ export interface UvInfo {
   source: UvSource | null;
   /** 识别不到时的说明。 */
   detail: string | null;
-}
-
-/** 常见安装位置；`uv tool install`、官方安装脚本、pipx 与 cargo 各放一处。 */
-export function uvKnownPaths(env: NodeJS.ProcessEnv = process.env, home = homedir()): string[] {
-  const dirs = [
-    join(home, '.local', 'bin'),
-    join(home, '.cargo', 'bin'),
-    env.LOCALAPPDATA ? join(env.LOCALAPPDATA, 'Programs', 'uv') : '',
-    env.APPDATA ? join(env.APPDATA, 'uv') : '',
-    env.ProgramData ? join(env.ProgramData, 'uv') : '',
-  ].filter(Boolean);
-  return dirs.map((dir) => join(dir, 'uv.exe'));
 }
 
 /** `uv 0.8.15 (abc1234 2025-09-01)` → `0.8.15`。 */
@@ -68,7 +55,6 @@ export async function detectUv(override = ''): Promise<UvInfo> {
   const candidates: Array<{ path: string; source: UvSource }> = [];
   if (override.trim()) candidates.push({ path: resolve(override.trim()), source: 'config' });
   candidates.push({ path: 'uv', source: 'path' });
-  for (const path of uvKnownPaths()) candidates.push({ path, source: 'known' });
   for (const candidate of candidates) {
     if (candidate.path !== 'uv' && !existsSync(candidate.path)) continue;
     const version = await probeUv(candidate.path);

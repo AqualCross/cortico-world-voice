@@ -1,11 +1,10 @@
-/** ffmpeg：先找本机已有的（配置 → PATH → 常见位置 → 自己装的那份），都没有才下载静态包。 */
+/** ffmpeg：先找配置、再找 PATH（解析成真实路径），都没有才下载静态包。 */
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { delimiter, join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { downloadVerified, extractZip } from './download.ts';
 
-export type FfmpegSource = 'config' | 'path' | 'known' | 'installed';
+export type FfmpegSource = 'config' | 'path' | 'installed';
 
 export interface FfmpegInfo {
   path: string | null;
@@ -14,16 +13,26 @@ export interface FfmpegInfo {
   detail: string | null;
 }
 
-/** 常见安装位置；winget / chocolatey / 手动解压的目录都在内。 */
-export function ffmpegKnownPaths(env: NodeJS.ProcessEnv = process.env, home = homedir()): string[] {
-  const dirs = [
-    env.LOCALAPPDATA ? join(env.LOCALAPPDATA, 'Microsoft', 'WinGet', 'Links') : '',
-    env.LOCALAPPDATA ? join(env.LOCALAPPDATA, 'Programs', 'ffmpeg', 'bin') : '',
-    env.ProgramData ? join(env.ProgramData, 'chocolatey', 'bin') : '',
-    'C:\\ffmpeg\\bin',
-    join(home, 'ffmpeg', 'bin'),
-  ].filter(Boolean);
-  return dirs.map((dir) => join(dir, 'ffmpeg.exe'));
+/**
+ * 在 PATH 里找可执行文件的真实位置（Windows 按 PATHEXT 补扩展名）。
+ * 用户装在哪就认哪，不去猜固定目录；找不到返回 null。
+ */
+export function resolveOnPath(name: string, env: NodeJS.ProcessEnv = process.env): string | null {
+  const dirs = String(env.PATH ?? env.Path ?? '')
+    .split(delimiter)
+    .map((dir) => dir.trim().replace(/^"|"$/g, ''))
+    .filter(Boolean);
+  const exts = String(env.PATHEXT ?? (process.platform === 'win32' ? '.EXE;.CMD;.BAT;.COM' : ''))
+    .split(';')
+    .filter(Boolean);
+  const names = [name, ...exts.flatMap((ext) => [`${name}${ext.toLowerCase()}`, `${name}${ext.toUpperCase()}`])];
+  for (const dir of dirs) {
+    for (const file of names) {
+      const full = join(dir, file);
+      if (existsSync(full)) return full;
+    }
+  }
+  return null;
 }
 
 /** `ffmpeg version 7.1-full_build-www.gyan.dev ...` → `7.1-full_build-www.gyan.dev`。 */
@@ -67,12 +76,11 @@ export async function detectFfmpeg(override = ''): Promise<FfmpegInfo> {
   const tried: string[] = [];
   const candidates: Array<{ path: string; source: FfmpegSource }> = [];
   if (override.trim()) candidates.push({ path: resolve(override.trim()), source: 'config' });
-  candidates.push({ path: 'ffmpeg', source: 'path' });
-  for (const path of ffmpegKnownPaths()) candidates.push({ path, source: 'known' });
+  const onPath = resolveOnPath('ffmpeg');
+  if (onPath) candidates.push({ path: onPath, source: 'path' });
   for (const candidate of candidates) {
-    if (candidate.path !== 'ffmpeg' && !existsSync(candidate.path)) continue;
     const version = await probeFfmpeg(candidate.path);
-    if (version) return { path: candidate.path === 'ffmpeg' ? 'ffmpeg' : candidate.path, version, source: candidate.source, detail: null };
+    if (version) return { path: candidate.path, version, source: candidate.source, detail: null };
     tried.push(candidate.path);
   }
   return { path: null, version: null, source: null, detail: tried.length ? `试过 ${tried.length} 处，都不像 ffmpeg` : '没有找到 ffmpeg' };

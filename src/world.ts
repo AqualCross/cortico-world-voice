@@ -452,6 +452,7 @@ export class AudioWorld implements World {
   private gpuCache: { at: number; report: GpuReport } | null = null;
   private uvCache: { at: number; info: UvInfo } | null = null;
   private ffmpegCache: { at: number; info: FfmpegInfo } | null = null;
+  private ffmpegAutofilled = false;
   /** 正在跑的「获取」链数量；链的步骤之间没有 busy 的任务，卸载要靠它挡住。 */
   private preparing = 0;
 
@@ -744,7 +745,7 @@ export class AudioWorld implements World {
   private async playAny(opts: { path: string; volume: number; signal: AbortSignal }): Promise<void> {
     const audify = loadAudify();
     const ffmpeg = (await this.ffmpegInfo()).path;
-    if (audify && ffmpeg && ffmpeg !== 'ffmpeg') {
+    if (audify && ffmpeg) {
       const output = new PcmOutput(audify, () => 100);
       const onAbort = (): void => output.cut();
       opts.signal.addEventListener('abort', onAbort, { once: true });
@@ -1187,7 +1188,7 @@ export class AudioWorld implements World {
     return report;
   }
 
-  /** uv 先看本机（配置/PATH/常见位置），再看自己目录里装的那份。 */
+  /** uv 先看配置，再认 PATH 上的裸名；都没有就用自己目录里装的那份。 */
   private async uvInfo(): Promise<UvInfo> {
     const now = Date.now();
     if (this.uvCache && now - this.uvCache.at < 15_000) return this.uvCache.info;
@@ -1614,7 +1615,7 @@ export class AudioWorld implements World {
     const tier = this.tier();
     const gpuIndex = Number(/^gpu(\d+)$/.exec(this.opts.cfg.speak.gptSovits.tier)?.[1] ?? '0');
     const ffmpeg = (await this.ffmpegInfo()).path;
-    const ffmpegDir = ffmpeg && ffmpeg !== 'ffmpeg' ? dirname(ffmpeg) : '';
+    const ffmpegDir = ffmpeg ? dirname(ffmpeg) : '';
     const key = `${projectDir}|${tier}|${gpuIndex}|${ffmpegDir}`;
     if (this.rvcCache?.key === key) return this.rvcCache.engine;
     this.rvcCache?.engine.dispose();
@@ -2445,6 +2446,11 @@ export class AudioWorld implements World {
         const version = await probeFfmpeg(local);
         if (version) info = { path: local, version, source: 'installed', detail: null };
       }
+    }
+    // 认到的真实路径写回配置：面板看得到，下次不必再探。
+    if (info.path && !this.opts.cfg.ffmpegPath.trim() && !this.ffmpegAutofilled) {
+      this.ffmpegAutofilled = true;
+      this.opts.persist({ ffmpegPath: info.path } as never);
     }
     this.ffmpegCache = { at: now, info };
     return info;
