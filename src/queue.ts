@@ -9,8 +9,16 @@ export function clampBalance(value: number): number {
   return Math.max(-100, Math.min(100, Math.round(value)));
 }
 
+export interface PlayOptions {
+  /** 文件条目的路径；流式条目没有。 */
+  path?: string;
+  volume: number;
+  balance: number;
+  signal: AbortSignal;
+}
+
 export interface QueueRequest {
-  path: string;
+  path?: string;
   /** 面板上显示的名字；缺省用文件名。 */
   shown?: string;
   /** 0–100；缺省用配置里的音量。 */
@@ -22,6 +30,10 @@ export interface QueueRequest {
   /** 音频时长（秒）；有字幕时按它算当前说到哪句。 */
   seconds?: number;
   origin: QueueOrigin;
+  /** 流式条目自己的播放实现；缺省走队列共用的 play。 */
+  play?: (opts: PlayOptions) => Promise<void>;
+  /** 成为下一条时提前开工（开始合成），等轮到它再消费。 */
+  warm?: (signal: AbortSignal) => void;
 }
 
 export interface QueueItemView {
@@ -48,7 +60,7 @@ export interface QueueSnapshot {
   lastError: string | null;
 }
 
-export type PlayFn = (opts: { path: string; volume: number; balance: number; signal: AbortSignal }) => Promise<void>;
+export type PlayFn = (opts: PlayOptions) => Promise<void>;
 
 /** 队列的旁听钩子：字幕层跟着真正开播/收播。 */
 export interface QueueHooks {
@@ -63,6 +75,7 @@ interface Item extends QueueRequest {
   balance: number;
   controller: AbortController;
   startedAt: number;
+  warmed: boolean;
 }
 
 export class PlayQueue {
@@ -84,14 +97,16 @@ export class PlayQueue {
     const item: Item = {
       ...req,
       id: `q${++this.seq}`,
-      shown: req.shown?.trim() || basename(req.path),
+      shown: req.shown?.trim() || (req.path ? basename(req.path) : '音频'),
       volume: req.volume ?? this.defaultVolume(),
       balance: clampBalance(req.balance ?? this.defaultBalance()),
       controller: new AbortController(),
       startedAt: 0,
+      warmed: false,
     };
     this.pending.push(item);
     void this.drain();
+    this.warmNext();
     return { id: item.id, position: item === this.current ? 0 : this.pending.length };
   }
 
@@ -112,7 +127,7 @@ export class PlayQueue {
     return {
       id: item.id,
       shown: item.shown,
-      ref: item.path,
+      ref: item.path ?? '',
       volume: item.volume,
       balance: item.balance,
       origin: item.origin,
@@ -143,6 +158,7 @@ export class PlayQueue {
     if (index < 0) return `队列里没有 ${id}。`;
     const [removed] = this.pending.splice(index, 1);
     removed.controller.abort();
+    this.warmNext();
     return `已从队列移除 ${removed.id}（${removed.shown}）；队列里还有 ${this.pending.length} 条。`;
   }
 
@@ -167,6 +183,18 @@ export class PlayQueue {
     }
   }
 
+  /** 预取下一条：它成为队首时就开始合成，轮到播放时多半已有音频。 */
+  private warmNext(): void {
+    const next = this.pending[0];
+    if (!next || next.warmed) return;
+    next.warmed = true;
+    try {
+      next.warm?.(next.controller.signal);
+    } catch {
+      // 预热失败等到真正播放时再作为这条的错误报出来。
+    }
+  }
+
   private async drain(): Promise<void> {
     if (this.running) return;
     this.running = true;
@@ -175,9 +203,11 @@ export class PlayQueue {
         const item = this.pending.shift()!;
         this.current = item;
         item.startedAt = Date.now();
+        this.warmNext();
         try {
           this.hooks.onStart?.(this.viewOf(item, 0));
-          await this.play({ path: item.path, volume: item.volume, balance: item.balance, signal: item.controller.signal });
+          const play = item.play ?? this.play;
+          await play({ path: item.path, volume: item.volume, balance: item.balance, signal: item.controller.signal });
           this.lastError = null;
         } catch (err) {
           // 取消不算失败，只有真的播不出来才留在页面上。

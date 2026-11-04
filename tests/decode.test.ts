@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ffmpegArgs } from '../src/decode.ts';
+import { ffmpegArgs, ffmpegStreamArgs } from '../src/decode.ts';
 import { applyGain } from '../src/audio-out.ts';
 
 describe('解码参数', () => {
@@ -10,6 +10,15 @@ describe('解码参数', () => {
     expect(args[args.indexOf('-ar') + 1]).toBe('48000');
     expect(args[args.indexOf('-i') + 1]).toBe('D:/a.wav');
     expect(args[args.length - 1]).toBe('-');
+    expect(args).toContain('pcm_s16le');
+  });
+
+  it('流式解码从 stdin 读，探测窗口压小', () => {
+    const args = ffmpegStreamArgs();
+    expect(args[args.indexOf('-i') + 1]).toBe('pipe:0');
+    expect(args[args.indexOf('-probesize') + 1]).toBe('32k');
+    expect(args[args.indexOf('-ac') + 1]).toBe('2');
+    expect(args[args.indexOf('-ar') + 1]).toBe('48000');
     expect(args).toContain('pcm_s16le');
   });
 });

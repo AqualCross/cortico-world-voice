@@ -17,15 +17,15 @@ import { MusicProcessor, type MusicTask } from './music-process.ts';
 import { runMusicCommand } from './music-command.ts';
 import { convertLongAudio } from './rvc-long.ts';
 import { FIRERED_VAD_FILES, PARAFORMER_FILES, SENSEVOICE_FILES, TIER_SPECS } from './catalog.ts';
-import { synthesizeCloud } from './cloud.ts';
-import { synthesizeEdge } from './edge.ts';
+import { synthesizeCloudStream } from './cloud.ts';
+import { synthesizeEdgeStream } from './edge.ts';
 import { GptSovitsService, gptSovitsMissing, type GptSovitsSetup } from './gpt-sovits.ts';
 import { formatFromName, transcribeDashscope, transcribeDashscopeAsync, transcribeOpenai } from './stt.ts';
 import { ClipsStore, type ClipRecord } from './clips.ts';
 import { TranscriptsStore } from './transcripts.ts';
 import { audioPath, migrateLayout } from './storage.ts';
 import { importLegacyRecords } from './import-legacy.ts';
-import { encodeWav, wavSeconds } from './wav.ts';
+import { encodeWav, patchWavSizes, wavSeconds } from './wav.ts';
 import { TimbreStore } from './timbre.ts';
 import { bankDir, listBanks } from './banks.ts';
 import { RvcVoices } from './rvc-voices.ts';
@@ -49,9 +49,10 @@ import { parsedFromFields, senseVoiceNote } from './sensevoice-tags.ts';
 import { envPython, killProcessesUnder, projectPython } from './project-env.ts';
 import { detectFfmpeg, installFfmpeg, probeFfmpeg, type FfmpegInfo } from './ffmpeg.ts';
 import { PcmOutput, loadAudify } from './audio-out.ts';
-import { playFile, playFileStream } from './play.ts';
+import { playFile, playFileStream, playStream } from './play.ts';
 import { ToolTextStore } from './tool-text.ts';
-import { PlayQueue, clampBalance } from './queue.ts';
+import { PlayQueue, clampBalance, type PlayOptions } from './queue.ts';
+import { BufferedSpeech, abortWithTimeout, type SpeechStream } from './speech.ts';
 import { SubtitleOverlay, type SubtitleStyle } from './subtitle.ts';
 import { detectUv, installUv, probeUv, type UvInfo } from './uv.ts';
 
@@ -427,6 +428,8 @@ export class AudioWorld implements World {
   private readonly speakJobs: SpeakJob[] = [];
   private speakBusy = false;
   private speakSeq = 0;
+  /** 兜底播放时写临时文件用的序号。 */
+  private sayFileSeq = 0;
   /** World 停一次加一，用来丢掉停止之前提交、还在合成的那些。 */
   private speakGen = 0;
   private host: WorldHost | null = null;
@@ -750,7 +753,9 @@ export class AudioWorld implements World {
   }
 
   /** 有 audify + ffmpeg 时每条播放新开一条 PCM 输出（跟随当前默认设备），否则退回 PowerShell 播放。 */
-  private async playAny(opts: { path: string; volume: number; balance: number; signal: AbortSignal }): Promise<void> {
+  private async playAny(opts: PlayOptions): Promise<void> {
+    const path = opts.path;
+    if (!path) throw new Error('播放条目没有文件。');
     const audify = loadAudify();
     const ffmpeg = (await this.ffmpegInfo()).path;
     if (audify && ffmpeg) {
@@ -758,14 +763,14 @@ export class AudioWorld implements World {
       const onAbort = (): void => output.cut();
       opts.signal.addEventListener('abort', onAbort, { once: true });
       try {
-        await playFileStream({ ...opts, ffmpeg, output });
+        await playFileStream({ path, volume: opts.volume, balance: opts.balance, signal: opts.signal, ffmpeg, output });
         return;
       } finally {
         opts.signal.removeEventListener('abort', onAbort);
         output.close();
       }
     }
-    await playFile(opts);
+    await playFile({ path, volume: opts.volume, balance: opts.balance, signal: opts.signal });
   }
 
   /** 面板与工具共用的数据面。 */
@@ -2034,40 +2039,46 @@ export class AudioWorld implements World {
     };
   }
 
-  /** 合成一句：Edge 在线、本机 GPT-SoVITS 或云端引擎。 */
-  private async speakOnce(
+  /** 合成一句：Edge 在线、本机 GPT-SoVITS 或云端引擎；能流的引擎边到边给字节。 */
+  private async speakOnceStream(
     text: string,
     voice?: string,
     instruction?: string,
-  ): Promise<{ wav: Buffer; engine: string; format: string; voice: string; model: string }> {
+    signal?: AbortSignal,
+  ): Promise<SpeechStream> {
     const cfg = this.opts.cfg;
     const engine = cfg.speak.engine;
     if (engine === 'edge') {
       const e = cfg.speak.edge;
       const usedVoice = voice?.trim() || e.voice.trim();
-      const bytes = await synthesizeEdge({ text, voice: usedVoice, rate: e.rate, pitch: e.pitch });
-      return { wav: bytes, engine: 'edge', format: 'mp3', voice: usedVoice, model: 'Edge TTS' };
+      return synthesizeEdgeStream({ text, voice: usedVoice, rate: e.rate, pitch: e.pitch, signal });
     }
     if (engine === 'gpt-sovits') {
       const g = cfg.speak.gptSovits;
       const item = this.timbre.get(g.refAudio.split(/[\\/]/).pop() ?? '');
       const refAudio = item ? this.timbre.pathOf(item.file) : g.refAudio.trim();
       if (!refAudio) throw new Error('还没选参考音频：在「说话」页导入一段 WAV 并选中。');
-      const wav = await this.sovitsService().synthesize(text, {
+      const speech = await this.sovitsService().synthesizeStream(text, {
         refAudio,
         promptText: item?.text ?? g.refText,
         promptLang: '',
         textLang: cfg.speak.textLang,
         speed: g.speed,
-      }, AbortSignal.timeout(600_000));
-      return { wav, engine: 'gpt-sovits', format: 'wav', voice: item?.file ?? basename(refAudio), model: 'GPT-SoVITS' };
+      }, abortWithTimeout(signal, 600_000));
+      return {
+        engine: 'gpt-sovits',
+        format: speech.format,
+        voice: item?.file ?? basename(refAudio),
+        model: 'GPT-SoVITS',
+        chunks: speech.chunks,
+      };
     }
     const name = engine === 'dashscope' ? cfg.speak.dashscope.apiKeySecret : cfg.speak.openai.apiKeySecret;
     const apiKey = this.opts.secret(name).trim();
     if (!apiKey) throw new Error(`还没有填密钥：在「说话」页把 ${name} 写上。`);
     const format = engine === 'dashscope' ? cfg.speak.dashscope.format : cfg.speak.openai.format;
     const usedVoice = voice?.trim() || (engine === 'dashscope' ? cfg.speak.dashscope.voice : cfg.speak.openai.voice);
-    const wav = await synthesizeCloud({
+    const speech = await synthesizeCloudStream({
       engine,
       apiKey,
       text,
@@ -2075,6 +2086,7 @@ export class AudioWorld implements World {
       format,
       instruction: instruction?.trim() || cfg.speak.dashscope.instruction,
       seed: engine === 'dashscope' && cfg.speak.dashscope.seed >= 0 ? cfg.speak.dashscope.seed : undefined,
+      signal,
       dashscope: {
         baseUrl: cfg.speak.dashscope.baseUrl,
         model: cfg.speak.dashscope.model,
@@ -2089,7 +2101,7 @@ export class AudioWorld implements World {
       },
     });
     const model = engine === 'dashscope' ? cfg.speak.dashscope.model : cfg.speak.openai.model;
-    return { wav, engine, format: format || 'wav', voice: usedVoice, model };
+    return { engine, format: speech.format || format || 'wav', voice: usedVoice, model, chunks: speech.chunks };
   }
 
   private convertTool(): ToolDef {
@@ -2143,16 +2155,105 @@ export class AudioWorld implements World {
         const balance = typeof args.balance === 'number' ? clampBalance(args.balance) : undefined;
         const silent = args.silent === true;
         const job: SpeakJob = { id: `say${++this.speakSeq}`, text, voice, instruction, balance, silent };
-        const ahead = (this.speakBusy ? 1 : 0) + this.speakJobs.length;
-        this.speakJobs.push(job);
-        void this.drainSpeak();
-        const tail = silent ? '，完成后以 audio.say_done 事件带回文件路径，不播放' : '，说完会自动播放';
-        return `已在后台开始合成 ${job.id}${ahead ? `（前面还有 ${ahead} 句）` : ''}${tail}；不用等它。`;
+        if (!silent) {
+          this.enqueueSay(job);
+        } else {
+          const ahead = (this.speakBusy ? 1 : 0) + this.speakJobs.length;
+          this.speakJobs.push(job);
+          void this.drainSpeak();
+          const tail = '，完成后以 audio.say_done 事件带回文件路径，不播放';
+          return `已在后台开始合成 ${job.id}${ahead ? `（前面还有 ${ahead} 句）` : ''}${tail}；不用等它。`;
+        }
+        return `已加入待说队列 ${job.id}，说完会自动播放；不用等它。`;
       },
     };
   }
 
-  /** 后台合成一条接一条地做；成功不出声，失败推一条事件让模型知道。 */
+  /**
+   * 非 silent 的一律作为流式条目入播放队列：当前这条开始播放时预取下一条，
+   * 播放层边解边放，说完再落记录。
+   */
+  private enqueueSay(job: SpeakJob): void {
+    const buffer = new BufferedSpeech((signal) => this.speakOnceStream(job.text, job.voice, job.instruction, signal));
+    const shown = job.text.length > 24 ? `${job.text.slice(0, 24)}…` : job.text;
+    // 本机 GPT-SoVITS 一次只跑一个推理，别为了预取另外再起一条。
+    const warmable = this.opts.cfg.speak.engine !== 'gpt-sovits';
+    this.queue.enqueue({
+      origin: 'tool',
+      shown,
+      text: job.text,
+      balance: job.balance,
+      warm: warmable ? (signal) => buffer.start(signal) : undefined,
+      play: async (opts) => {
+        try {
+          const seconds = await this.playSpeech(buffer, opts);
+          const info = buffer.speech;
+          if (!info) return;
+          this.saveClip({ bytes: buffer.bytes(), format: info.format, voice: info.voice, model: info.model }, job.text, seconds);
+        } catch (err) {
+          if (!opts.signal.aborted) this.reportSayFailure(job, err);
+          throw err;
+        }
+      },
+    });
+  }
+
+  /** 放一条已缓冲的语音：本机 PCM 路径边解边放，缺依赖就收齐再走系统播放器。 */
+  private async playSpeech(buffer: BufferedSpeech, opts: PlayOptions): Promise<number | null> {
+    buffer.start(opts.signal);
+    const audify = loadAudify();
+    const ffmpeg = (await this.ffmpegInfo()).path;
+    if (audify && ffmpeg) {
+      const output = new PcmOutput(audify, () => 100);
+      const onAbort = (): void => output.cut();
+      opts.signal.addEventListener('abort', onAbort, { once: true });
+      try {
+        const played = await playStream({
+          chunks: buffer.chunks(opts.signal),
+          volume: opts.volume,
+          balance: opts.balance,
+          signal: opts.signal,
+          ffmpeg,
+          output,
+        });
+        return played.seconds;
+      } finally {
+        opts.signal.removeEventListener('abort', onAbort);
+        output.close();
+      }
+    }
+    for await (const _chunk of buffer.chunks(opts.signal)) {
+      // 兜底播放器只收文件：先把剩下的块收齐。
+    }
+    const info = buffer.speech;
+    if (!info) throw new Error('合成没有返回音频。');
+    const file = this.scratch(`say-${Date.now()}-${++this.sayFileSeq}.${info.format}`);
+    writeFileSync(file, info.format === 'wav' ? patchWavSizes(buffer.bytes()) : buffer.bytes());
+    try {
+      await playFile({ path: file, volume: opts.volume, balance: opts.balance, signal: opts.signal });
+    } finally {
+      try {
+        rmSync(file, { force: true });
+      } catch {
+        // 临时文件删不掉不影响这次播放
+      }
+    }
+    return null;
+  }
+
+  private reportSayFailure(job: SpeakJob, err: unknown): void {
+    const message = err instanceof Error ? err.message : String(err);
+    void this.host?.pushEvent({
+      type: 'audio.failed',
+      ts: nowIso(this.opts.timezone),
+      source: this.id,
+      origin: 'external',
+      senderKey: this.id,
+      text: `audio_say（${job.id}）没说出来：${message}`,
+    }).catch(() => {});
+  }
+
+  /** silent 的一条接一条地做；成功不出声，失败推一条事件让模型知道。 */
   private async drainSpeak(): Promise<void> {
     if (this.speakBusy) return;
     this.speakBusy = true;
@@ -2161,47 +2262,34 @@ export class AudioWorld implements World {
       while (this.speakJobs.length) {
         const job = this.speakJobs.shift()!;
         try {
-          const out = await this.speakOnce(job.text, job.voice, job.instruction);
+          const stream = await this.speakOnceStream(job.text, job.voice, job.instruction);
+          const parts: Buffer[] = [];
+          for await (const chunk of stream.chunks) parts.push(Buffer.from(chunk));
           if (gen !== this.speakGen) return;
-          const clip = this.saveClip(out, job.text);
-          if (job.silent) {
-            void this.host?.pushEvent({
-              type: 'audio.say_done',
-              ts: nowIso(this.opts.timezone),
-              source: this.id,
-              origin: 'external',
-              senderKey: this.id,
-              // 路径和句柄都给：正文带本地路径，附件由 Core 分配 log: 句柄。
-              text: `audio_say（${job.id}）已合成，未播放：${clip.path}（${clip.voice}，${clip.seconds ?? '?'} 秒）。`,
-              meta: { job: job.id, path: clip.path, voice: clip.voice, model: clip.model, seconds: clip.seconds },
-              // 音频按 Core 的附件契约入 session：句柄随事件交给模型，别的插件用同一个句柄取回这段音频。
-              blobs: [{
-                bytes: out.wav,
-                mime: clip.mime,
-                name: `${clip.id}.${clip.ext}`,
-                fallbackText: '这段语音的音频文件；把这个句柄交给别的插件（例如 QQ 语音参数）即可发送同一段音频。',
-              }],
-            }, { deliver: true }).catch(() => {});
-            continue;
-          }
-          this.queue.enqueue({
-            path: clip.path,
-            origin: 'tool',
-            balance: job.balance,
-            text: clip.text,
-            seconds: clip.seconds ?? undefined,
-          });
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          if (gen !== this.speakGen) return;
+          const saved = this.saveClip(
+            { bytes: Buffer.concat(parts), format: stream.format, voice: stream.voice, model: stream.model },
+            job.text,
+          );
           void this.host?.pushEvent({
-            type: 'audio.failed',
+            type: 'audio.say_done',
             ts: nowIso(this.opts.timezone),
             source: this.id,
             origin: 'external',
             senderKey: this.id,
-            text: `audio_say（${job.id}）没说出来：${message}`,
-          }).catch(() => {});
+            // 路径和句柄都给：正文带本地路径，附件由 Core 分配 log: 句柄。
+            text: `audio_say（${job.id}）已合成，未播放：${saved.clip.path}（${saved.clip.voice}，${saved.clip.seconds ?? '?'} 秒）。`,
+            meta: { job: job.id, path: saved.clip.path, voice: saved.clip.voice, model: saved.clip.model, seconds: saved.clip.seconds },
+            // 音频按 Core 的附件契约入 session：句柄随事件交给模型，别的插件用同一个句柄取回这段音频。
+            blobs: [{
+              bytes: saved.bytes,
+              mime: saved.clip.mime,
+              name: `${saved.clip.id}.${saved.clip.ext}`,
+              fallbackText: '这段语音的音频文件；把这个句柄交给别的插件（例如 QQ 语音参数）即可发送同一段音频。',
+            }],
+          }, { deliver: true }).catch(() => {});
+        } catch (err) {
+          if (gen !== this.speakGen) return;
+          this.reportSayFailure(job, err);
         }
       }
     } finally {
@@ -2209,17 +2297,27 @@ export class AudioWorld implements World {
     }
   }
 
-  /** 合成结果先入记录仓库再播放；面板的「语音」栏就是这些记录。 */
-  private saveClip(out: { wav: Buffer; format: string; voice: string; model: string }, text: string): ClipRecord {
-    return this.clips.add({
-      bytes: out.wav,
+  /** 合成结果入记录仓库；流式 WAV 先补长度。返回实际落盘的字节，供事件附件复用。 */
+  private saveClip(
+    out: { bytes: Buffer; format: string; voice: string; model: string },
+    text: string,
+    seconds?: number | null,
+  ): { clip: ClipRecord; bytes: Buffer } {
+    const bytes = this.clipBytes(out);
+    const clip = this.clips.add({
+      bytes,
       ext: out.format,
       text,
       voice: out.voice,
       model: out.model,
-      seconds: wavSeconds(out.wav),
+      seconds: typeof seconds === 'number' && seconds > 0 ? seconds : wavSeconds(bytes),
       source: 'tool',
     });
+    return { clip, bytes };
+  }
+
+  private clipBytes(out: { bytes: Buffer; format: string }): Buffer {
+    return out.format === 'wav' ? patchWavSizes(out.bytes) : out.bytes;
   }
 
   private transcribeTool(): ToolDef {

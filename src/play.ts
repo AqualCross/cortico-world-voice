@@ -4,8 +4,8 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { PcmOutput } from './audio-out.ts';
-import { decodePcm } from './decode.ts';
+import { OUTPUT_CHANNELS, OUTPUT_RATE, PcmOutput } from './audio-out.ts';
+import { decodePcm, decodeStreamPcm } from './decode.ts';
 
 const PLAY_PS1 = fileURLToPath(new URL('../assets/play.ps1', import.meta.url));
 
@@ -91,6 +91,41 @@ export function playFile(opts: PlayOptions): Promise<void> {
 export interface StreamPlayOptions extends PlayOptions {
   ffmpeg: string;
   output: PcmOutput;
+}
+
+export interface EncodedStreamPlayOptions {
+  /** 编码格式的字节流（mp3 / wav…），边到边解。 */
+  chunks: AsyncIterable<Buffer>;
+  /** 0–100。 */
+  volume: number;
+  /** -100（全左）… 100（全右）；缺省居中。 */
+  balance?: number;
+  signal: AbortSignal;
+  ffmpeg: string;
+  output: PcmOutput;
+}
+
+/** 播一条编码流：ffmpeg 从 stdin 边读边解，写完等音频播完；返回实际播了多久。 */
+export async function playStream(opts: EncodedStreamPlayOptions): Promise<{ seconds: number }> {
+  const { chunks, volume, balance = 0, signal, ffmpeg, output } = opts;
+  const gain = Math.max(0, Math.min(1, volume / 100));
+  const pan = Math.max(-1, Math.min(1, balance / 100));
+  await output.write(OUTPUT_RATE, Buffer.alloc(0)); // 先把输出按 48k 打开，省掉首块前的设备启动
+  let bytes = 0;
+  try {
+    for await (const chunk of decodeStreamPcm(ffmpeg, chunks, signal)) {
+      if (signal.aborted) throw new PlaybackError('aborted', '已取消');
+      bytes += chunk.length;
+      await output.write(OUTPUT_RATE, chunk, gain, pan);
+    }
+  } catch (err) {
+    if (signal.aborted) throw new PlaybackError('aborted', '已取消');
+    if (err instanceof PlaybackError) throw err;
+    throw new PlaybackError('failed', err instanceof Error ? err.message : String(err));
+  }
+  output.flush();
+  await output.drain();
+  return { seconds: bytes / (OUTPUT_RATE * OUTPUT_CHANNELS * 2) };
 }
 
 /**

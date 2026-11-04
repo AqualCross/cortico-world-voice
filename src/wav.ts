@@ -88,3 +88,29 @@ export function wavSeconds(bytes: Buffer): number | null {
   const layout = wavLayout(bytes);
   return layout ? layout.dataBytes / layout.bytesPerSecond : null;
 }
+
+/**
+ * 流式 WAV 的头是在第一块数据之前写出的，RIFF / data 长度是 0 或占位值。
+ * 收齐后按实际字节补上，落盘的文件才能被别的播放器正确读出时长。
+ */
+export function patchWavSizes(bytes: Buffer): Buffer {
+  if (bytes.length < 44 || bytes.toString('ascii', 0, 4) !== 'RIFF' || bytes.toString('ascii', 8, 12) !== 'WAVE') return bytes;
+  let off = 12;
+  let dataAt = -1;
+  while (off + 8 <= bytes.length) {
+    const id = bytes.toString('ascii', off, off + 4);
+    const size = bytes.readUInt32LE(off + 4);
+    if (id === 'data') {
+      dataAt = off;
+      break;
+    }
+    off = off + 8 + size + (size % 2);
+  }
+  if (dataAt < 0) return bytes;
+  const dataBytes = bytes.length - (dataAt + 8);
+  if (bytes.readUInt32LE(dataAt + 4) === dataBytes && bytes.readUInt32LE(4) === bytes.length - 8) return bytes;
+  const out = Buffer.from(bytes);
+  out.writeUInt32LE(dataBytes, dataAt + 4);
+  out.writeUInt32LE(out.length - 8, 4);
+  return out;
+}

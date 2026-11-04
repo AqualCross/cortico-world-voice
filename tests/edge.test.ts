@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { EdgeError, synthesizeEdge, type EdgeModule } from '../src/edge.ts';
+import { EdgeError, synthesizeEdge, synthesizeEdgeStream, type EdgeModule } from '../src/edge.ts';
 
 interface Recorded {
   meta: Array<[string, string]>;
@@ -39,6 +39,26 @@ describe('Edge 在线朗读', () => {
     expect(bytes).toEqual(Buffer.from([0xff, 0xf3, 0x64, 0xc4]));
     expect(recorded.meta).toEqual([['zh-CN-XiaoyiNeural', 'audio-24khz-48kbitrate-mono-mp3']]);
     expect(recorded.streams).toEqual([['你好呀', '+10%', '-5Hz']]);
+    expect(recorded.closed).toBe(1);
+  });
+
+  it('流式：先到先给，不等整句；流结束时关掉连接', async () => {
+    const recorded: Recorded = { meta: [], streams: [], closed: 0 };
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const mod = fakeModule(() => (async function* () {
+      yield Uint8Array.from([1, 2]);
+      await gate;
+      yield Uint8Array.from([3]);
+    })(), recorded);
+
+    const stream = await synthesizeEdgeStream({ text: '你好', voice: 'zh-CN-XiaoyiNeural', load: () => mod });
+    const iterator = stream.chunks[Symbol.asyncIterator]();
+    expect((await iterator.next()).value).toEqual(Buffer.from([1, 2]));
+    expect(recorded.closed).toBe(0);
+    release();
+    expect((await iterator.next()).value).toEqual(Buffer.from([3]));
+    expect((await iterator.next()).done).toBe(true);
     expect(recorded.closed).toBe(1);
   });
 

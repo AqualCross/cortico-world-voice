@@ -327,19 +327,22 @@ describe('Audio World', () => {
 
   it('audio_say 把左右平衡记到这一句上并掐到范围内', async () => {
     const world = AUDIO.create(fakeWorldContext(AUDIO, { scratchDir }));
-    // 占住合成循环，让这一句留在待合成列表里，不真的去合成。
-    const inner = world as unknown as { speakBusy: boolean; speakJobs: Array<{ balance?: number }> };
-    inner.speakBusy = true;
+    // 占住播放，让这一句留在队列当前条目上，不真的去合成/播放。
+    (world as unknown as { playSpeech: () => Promise<number | null> }).playSpeech = () => new Promise<number | null>(() => {});
     const say = world.tools().find((tool) => tool.name === 'audio_say')!;
     await say.handler({ text: '你好', balance: -180 }, {} as ToolCallContext);
-    expect(inner.speakJobs[0]?.balance).toBe(-100);
+    const snap = (world as unknown as { queue: { snapshot(): { current: { balance: number; text: string } | null } } }).queue.snapshot();
+    expect(snap.current?.balance).toBe(-100);
+    expect(snap.current?.text).toBe('你好');
   });
 
   it('audio_say 立刻回执，不等合成', async () => {
     const world = AUDIO.create(fakeWorldContext(AUDIO, { scratchDir }));
+    (world as unknown as { playSpeech: () => Promise<number | null> }).playSpeech = () => new Promise<number | null>(() => {});
     const say = world.tools().find((tool) => tool.name === 'audio_say')!;
     const text = String(await say.handler({ text: '你好' }, {} as ToolCallContext));
-    expect(text).toContain('后台开始合成');
+    expect(text).toContain('待说队列');
+    expect(text).toContain('不用等它');
   });
 
   it('audio_say 的 silent 也立刻回执，失败以事件带回', async () => {

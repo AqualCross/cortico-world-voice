@@ -12,7 +12,7 @@ function fakePlayer(): { started: string[]; balances: number[]; finish: () => vo
     started,
     balances,
     finish: () => gates.shift()?.(),
-    play: ({ path, balance, signal }) => new Promise<void>((resolve, reject) => {
+    play: ({ path = '', balance, signal }) => new Promise<void>((resolve, reject) => {
       started.push(path);
       balances.push(balance);
       gates.push(resolve);
@@ -113,6 +113,47 @@ describe('播放队列', () => {
     expect(fake.balances).toEqual([-40, 65, 100]);
     queue.clear();
     expect(clampBalance(Number.NaN)).toBe(0);
+  });
+
+  it('流式条目：成为下一条时预热，轮到它才用自己的播放实现', async () => {
+    const warmed: string[] = [];
+    const played: string[] = [];
+    const queue = new PlayQueue(async () => { throw new Error('不该走共用播放'); }, () => 50);
+    const gates: Array<() => void> = [];
+    queue.enqueue({ origin: 'tool', shown: '文件', play: () => new Promise<void>((resolve) => gates.push(resolve)) });
+    queue.enqueue({
+      origin: 'tool',
+      shown: '第一句',
+      warm: () => warmed.push('第一句'),
+      play: ({ volume, balance }) => {
+        played.push(`${volume}:${balance}`);
+        return new Promise<void>(() => {});
+      },
+    });
+    await tick();
+    expect(warmed).toEqual(['第一句']);
+    expect(played).toEqual([]);
+    gates.shift()?.();
+    await tick();
+    expect(played).toEqual(['50:0']);
+    queue.clear();
+  });
+
+  it('流式条目被移除或清空时中止预热信号', async () => {
+    const queue = new PlayQueue(async () => new Promise<void>(() => {}), () => 50);
+    const seen: AbortSignal[] = [];
+    queue.enqueue({ origin: 'tool', shown: '当前', play: () => new Promise<void>(() => {}) });
+    const second = queue.enqueue({
+      origin: 'tool',
+      shown: '下一句',
+      warm: (owned) => { seen.push(owned); },
+      play: () => new Promise<void>(() => {}),
+    });
+    await tick();
+    expect(seen[0]?.aborted).toBe(false);
+    queue.remove(second.id);
+    expect(seen[0]?.aborted).toBe(true);
+    queue.clear();
   });
 
   it('开播和收播都通知字幕层：跳过与播完都会收', async () => {

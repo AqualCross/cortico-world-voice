@@ -8,6 +8,7 @@
  */
 
 import { fetchWithProxy } from './proxy.ts';
+import { abortWithTimeout, readBody, type EncodedSpeech } from './speech.ts';
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -118,8 +119,7 @@ export function dashscopeAudio(body: unknown): { url?: string; data?: Buffer } {
     : `接口没给音频：${snippet(JSON.stringify(body ?? {}))}`);
 }
 
-/** 合成一段话，返回音频字节；格式按 `format`（默认 wav）。 */
-export async function synthesizeCloud(opts: {
+export interface CloudSpeechOptions {
   engine: 'dashscope' | 'openai';
   apiKey: string;
   text: string;
@@ -130,10 +130,19 @@ export async function synthesizeCloud(opts: {
   dashscope: { baseUrl?: string; model: string; sampleRate?: number; languageHints?: string };
   openai: { baseUrl: string; model: string; sampleRate?: number; languageHints?: string };
   fetchImpl?: FetchLike;
+  signal?: AbortSignal;
   timeoutMs?: number;
-}): Promise<Buffer> {
+}
+
+const single = (bytes: Buffer): AsyncGenerator<Buffer> => (async function* () { yield bytes; })();
+
+/**
+ * 合成一段话，边到边交出去；格式按 `format`（默认 wav）。
+ * OpenAI 兼容接口的响应体本身就是分块传的，直接转发；DashScope 的 HTTP 接口只回 JSON（URL/base64），退化成单块。
+ */
+export async function synthesizeCloudStream(opts: CloudSpeechOptions): Promise<EncodedSpeech> {
   const fetchImpl = opts.fetchImpl ?? fetchWithProxy;
-  const signal = AbortSignal.timeout(opts.timeoutMs ?? 60_000);
+  const signal = abortWithTimeout(opts.signal, opts.timeoutMs ?? 60_000);
   const format = opts.format ?? 'wav';
   const request = opts.engine === 'dashscope'
     ? dashscopeTtsRequest({
@@ -166,15 +175,27 @@ export async function synthesizeCloud(opts: {
   if (!res.ok) throw new CloudError(res.status, `接口返回 ${res.status}：${snippet(await res.text())}`);
 
   if (opts.engine === 'openai') {
+    const effective = (OPENAI_TTS_FORMATS as readonly string[]).includes(String(opts.format ?? '').toLowerCase())
+      ? String(opts.format).toLowerCase()
+      : 'mp3';
+    if (res.body) return { format: effective, chunks: readBody(res.body) };
     const bytes = Buffer.from(await res.arrayBuffer());
     if (!bytes.length) throw new CloudError(null, '接口返回的音频是空的');
-    return bytes;
+    return { format: effective, chunks: single(bytes) };
   }
   const audio = dashscopeAudio(await res.json());
-  if (audio.data) return audio.data;
+  if (audio.data) return { format, chunks: single(audio.data) };
   const download = await fetchImpl(audio.url!, { signal });
   if (!download.ok) throw new CloudError(download.status, `下载生成的语音失败：HTTP ${download.status}`);
   const bytes = Buffer.from(await download.arrayBuffer());
   if (!bytes.length) throw new CloudError(null, '下载到的语音是空的');
-  return bytes;
+  return { format, chunks: single(bytes) };
+}
+
+/** 整句合成（silent 与兜底用）；内部仍是流，收齐再返回。 */
+export async function synthesizeCloud(opts: CloudSpeechOptions): Promise<Buffer> {
+  const speech = await synthesizeCloudStream(opts);
+  const parts: Buffer[] = [];
+  for await (const chunk of speech.chunks) parts.push(Buffer.from(chunk));
+  return Buffer.concat(parts);
 }
