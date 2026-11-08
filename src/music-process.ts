@@ -39,7 +39,7 @@ export function mixTracks(value: unknown): MixTrack[] {
 export function mixArgs(tracks: MixTrack[], output: string): string[] {
   const filters = tracks.map((track, index) => `[${index}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,volume=${track.volume / 100},adelay=${Math.round(track.delaySec * 1000)}:all=1[t${index}]`);
   filters.push(`${tracks.map((_, index) => `[t${index}]`).join('')}amix=inputs=${tracks.length}:duration=longest:dropout_transition=0:normalize=0,alimiter=limit=0.95:level=false:latency=true[out]`);
-  return ['-hide_banner', '-nostdin', '-y', ...tracks.flatMap((track) => ['-i', track.path]), '-filter_complex', filters.join(';'), '-map', '[out]', '-c:a', 'pcm_s24le', output];
+  return ['-hide_banner', '-nostdin', '-y', ...tracks.flatMap((track) => ['-i', track.path]), '-filter_complex', filters.join(';'), '-map', '[out]', '-c:a', 'pcm_s16le', output];
 }
 
 /** 分离和混音均在子进程中执行；历史索引只公开已完成的输出。 */
