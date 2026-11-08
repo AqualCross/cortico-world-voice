@@ -1,11 +1,21 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ToolCallContext } from 'cortico/core/types.ts';
 import { dryMountWorld, fakeWorldContext } from 'cortico/extensions/dry-mount.ts';
 import { AUDIO } from '../src/definition.ts';
 import { FakeHost } from './helpers/fake-host.ts';
+
+const hasFfmpeg = ((): boolean => {
+  try {
+    execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+})();
 
 let scratchDir: string;
 beforeEach(() => { scratchDir = mkdtempSync(join(tmpdir(), 'audio-')); });
@@ -86,6 +96,38 @@ describe('Audio World', () => {
     const rvc = await invoke('speak', 'importRvcVoice', [voice]) as State;
     expect(rvc.rvcVoices).toEqual(['a.pth']);
     expect(rvc.rvcFile).toBe('a.pth');
+  });
+
+  it.runIf(hasFfmpeg)('非 WAV 的参考音频交给 ffmpeg 转成 16 kHz 单声道 WAV', async () => {
+    const ctx = fakeWorldContext(AUDIO, { scratchDir });
+    const deep = (base: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> => {
+      for (const [key, value] of Object.entries(patch)) {
+        const cur = base[key];
+        base[key] = value && typeof value === 'object' && !Array.isArray(value) && cur && typeof cur === 'object'
+          ? deep(cur as Record<string, unknown>, value as Record<string, unknown>)
+          : value;
+      }
+      return base;
+    };
+    ctx.persist = (patch) => { deep(ctx.cfg as unknown as Record<string, unknown>, patch as Record<string, unknown>); };
+    const world = AUDIO.create(ctx);
+    (world as unknown as { gpuCache: unknown }).gpuCache = { at: Date.now(), report: { state: 'absent', gpus: [], tier: 'cpu', detail: null } };
+    const invoke = world.webUi!().invoke as (panel: string, method: string, args: unknown[]) => Promise<unknown>;
+    const source = join(scratchDir, 'sample.flac');
+    execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1', '-ar', '44100', '-ac', '2', source], { stdio: 'ignore' });
+
+    const imported = await invoke('speak', 'importTimbreFromPath', [source]) as {
+      timbres: Array<{ file: string }>;
+      refFile: string;
+      speak: { gptSovits: { refAudio: string } };
+    };
+    expect(imported.timbres.map((item) => item.file)).toEqual(['sample.wav']);
+    expect(imported.refFile).toBe('sample.wav');
+    const out = readFileSync(imported.speak.gptSovits.refAudio);
+    expect(out.subarray(0, 4).toString('ascii')).toBe('RIFF');
+    expect(out.subarray(8, 12).toString('ascii')).toBe('WAVE');
+    expect(out.readUInt16LE(22)).toBe(1);
+    expect(out.readUInt32LE(24)).toBe(16000);
   });
 
   it('面板写配置：按声明的键深合并，未知键与错类型都拒绝', async () => {

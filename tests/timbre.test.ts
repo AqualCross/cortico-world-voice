@@ -27,12 +27,19 @@ describe('参考音频', () => {
     expect(store.list()).toHaveLength(2);
   });
 
-  it('只收 WAV；字节导入检查 RIFF 头', () => {
+  it('只收 WAV；字节导入检查 RIFF/WAVE 头', () => {
     const bad = join(root, 'a.mp3');
     writeFileSync(bad, wav);
     expect(() => store.importFile(bad)).toThrow(/WAV/);
     expect(() => store.importBytes('b.wav', Buffer.from('nope'))).toThrow(/WAV/);
     expect(store.importBytes('c.wav', wav).file).toBe('c.wav');
+  });
+
+  it('扩展名是 .wav 但内容不是 WAV 的也拒收', () => {
+    const fake = join(root, 'fake.wav');
+    writeFileSync(fake, Buffer.from('RIFF0000WEBP....'));
+    expect(() => store.importFile(fake)).toThrow(/WAV/);
+    expect(store.list()).toHaveLength(0);
   });
 
   it('台本按音频各自保存', () => {

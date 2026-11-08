@@ -1,5 +1,5 @@
 /** 参考音频（音色样本）的存放与索引：文件复制进 `<dataDir>/timbre/`，每个音频绑定自己的台本。 */
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
 
 export interface Timbre {
@@ -14,6 +14,26 @@ export interface Timbre {
 
 interface IndexFile {
   items: Timbre[];
+}
+
+/** WAV 判定：头部是 RIFF....WAVE；改过扩展名的假 WAV 过不了这一关。 */
+export function isWavBytes(bytes: Buffer): boolean {
+  return bytes.length >= 12
+    && bytes.subarray(0, 4).toString('ascii') === 'RIFF'
+    && bytes.subarray(8, 12).toString('ascii') === 'WAVE';
+}
+
+/** 路径版：扩展名是 .wav 且文件头对得上。 */
+export function isWavFile(path: string): boolean {
+  if (extname(path).toLowerCase() !== '.wav') return false;
+  try {
+    const head = Buffer.alloc(12);
+    const fd = openSync(path, 'r');
+    try { readSync(fd, head, 0, 12, 0); } finally { closeSync(fd); }
+    return isWavBytes(head);
+  } catch {
+    return false;
+  }
 }
 
 export class TimbreStore {
@@ -65,7 +85,7 @@ export class TimbreStore {
 
   /** 从任意位置导入一个 WAV（复制进 timbre 目录）。 */
   importFile(src: string): Timbre {
-    if (extname(src).toLowerCase() !== '.wav') throw new Error('参考音频要是 WAV 文件。');
+    if (!isWavFile(src)) throw new Error('参考音频要是 WAV 文件。');
     const file = this.unique(basename(src, extname(src)));
     mkdirSync(this.dir, { recursive: true });
     copyFileSync(src, join(this.dir, file));
@@ -75,7 +95,7 @@ export class TimbreStore {
   /** 从拖进来的字节导入。 */
   importBytes(name: string, bytes: Buffer): Timbre {
     if (!bytes.length) throw new Error('文件是空的。');
-    if (bytes.subarray(0, 4).toString('ascii') !== 'RIFF') throw new Error('参考音频要是 WAV 文件。');
+    if (!isWavBytes(bytes)) throw new Error('参考音频要是 WAV 文件。');
     const file = this.unique(basename(name, extname(name)));
     mkdirSync(this.dir, { recursive: true });
     writeFileSync(join(this.dir, file), bytes);

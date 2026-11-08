@@ -26,7 +26,7 @@ import { TranscriptsStore } from './transcripts.ts';
 import { audioPath, migrateLayout } from './storage.ts';
 import { importLegacyRecords } from './import-legacy.ts';
 import { encodeWav, patchWavSizes, wavSeconds } from './wav.ts';
-import { TimbreStore } from './timbre.ts';
+import { TimbreStore, isWavBytes, isWavFile, type Timbre } from './timbre.ts';
 import { bankDir, listBanks } from './banks.ts';
 import { RvcVoices } from './rvc-voices.ts';
 import { RvcEngine, type RvcState } from './rvc.ts';
@@ -816,14 +816,14 @@ export class AudioWorld implements World {
       if (method === 'importTimbreFromPath') {
         const source = String(args[0] ?? '').trim();
         if (!source) throw new Error('没有选到文件。');
-        const item = this.timbre.importFile(source);
+        const item = await this.importTimbre(basename(source), { path: source });
         this.selectTimbre(item.file);
         return this.speakState();
       }
       if (method === 'importTimbreBytes') {
         const name = String(args[0] ?? '').trim();
         const base64 = String(args[1] ?? '');
-        const item = this.timbre.importBytes(name || 'timbre.wav', Buffer.from(base64, 'base64'));
+        const item = await this.importTimbre(name || 'timbre.wav', { bytes: Buffer.from(base64, 'base64') });
         this.selectTimbre(item.file);
         return this.speakState();
       }
@@ -1907,6 +1907,28 @@ export class AudioWorld implements World {
     const item = this.timbre.get(file);
     if (!item) return;
     this.opts.persist({ speak: { gptSovits: { refAudio: this.timbre.pathOf(file), refText: item.text } } } as never);
+  }
+
+  /** 导入参考音频：WAV 原样收下，其他格式交给 ffmpeg 转成 16 kHz 单声道 WAV。 */
+  private async importTimbre(name: string, src: { path: string } | { bytes: Buffer }): Promise<Timbre> {
+    if ('path' in src && isWavFile(src.path)) return this.timbre.importFile(src.path);
+    if ('bytes' in src && isWavBytes(src.bytes)) return this.timbre.importBytes(name, src.bytes);
+    if ('bytes' in src && !src.bytes.length) throw new Error('文件是空的。');
+    const ffmpeg = (await this.ffmpegInfo()).path;
+    if (!ffmpeg) throw new Error('这个格式要先转成 WAV：先在「依赖」页装好 ffmpeg，或自己转成 WAV 再导入。');
+    const stamp = `${Date.now()}-${++this.handleSeq}`;
+    const input = 'path' in src ? src.path : this.scratch(`timbre-in-${stamp}.bin`);
+    const output = this.scratch(`timbre-out-${stamp}.wav`);
+    if ('bytes' in src) writeFileSync(input, src.bytes);
+    try {
+      await runMusicCommand(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y', '-i', input, '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', output], { signal: AbortSignal.timeout(120_000) });
+      return this.timbre.importBytes(name, readFileSync(output));
+    } catch (error) {
+      throw new Error(`转成 WAV 失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      if ('bytes' in src) rmSync(input, { force: true });
+      rmSync(output, { force: true });
+    }
   }
 
   /** 面板写配置：只收已声明的键，按 schema 类型验收后按路径深合并进 `worlds.audio`。 */

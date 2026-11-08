@@ -88,7 +88,7 @@ const TEXT = {
     refText: '参考台本',
     refNone: '未选择',
     refImport: '导入',
-    refDrop: '把 WAV 拖到这里导入',
+    refDrop: '把音频拖到这里导入（WAV / MP3 / FLAC…）',
     speed: '语速',
     model: '模型',
     voice: '音色',
@@ -153,7 +153,7 @@ const TEXT = {
     refText: 'Reference script',
     refNone: 'None',
     refImport: 'Import',
-    refDrop: 'Drop a WAV here to import',
+    refDrop: 'Drop audio here to import (WAV / MP3 / FLAC…)',
     speed: 'Speed',
     model: 'Model',
     voice: 'Voice',
@@ -393,7 +393,7 @@ export const speakPanel: WebUiPanel = {
       const importBtn = ctx.ui.button(t.refImport, {
         size: 'sm',
         onClick: async () => {
-          const picked = await ctx.pickPath({ kind: 'file', extensions: ['.wav'] });
+          const picked = await ctx.pickPath({ kind: 'file', extensions: ['.wav', '.mp3', '.m4a', '.flac', '.ogg', '.opus', '.aac', '.wma', '.aiff', '.amr'] });
           if (picked) void call('importTimbreFromPath', [picked]);
         },
       });
