@@ -1,6 +1,6 @@
 {
   "name": "cortico-world-voice",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "type": "module",
   "description": "让Coo能听能说。",
   "author": "AqualCross",
