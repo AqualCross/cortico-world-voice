@@ -36,10 +36,35 @@ export interface OrtSession {
   run(inputs: Record<string, unknown>): Promise<Record<string, { data: Float32Array }>>;
 }
 
+export interface OrtSessionOptions {
+  intraOpNumThreads?: number;
+  interOpNumThreads?: number;
+  executionMode?: 'sequential' | 'parallel';
+  /** 会话配置项；Node 绑定把嵌套键拍平成 `session.intra_op.allow_spinning` 这类点号键，值必须是字符串。 */
+  extra?: Record<string, unknown>;
+}
+
 export interface OrtModule {
   Tensor: new (type: 'float32', data: Float32Array, dims: readonly number[]) => OrtTensor;
-  InferenceSession: { create(path: string): Promise<OrtSession> };
+  InferenceSession: { create(path: string, options?: OrtSessionOptions): Promise<OrtSession> };
 }
+
+/**
+ * 模型只有 2~3 MB，VAD 还要每 20 ms 推一次。onnxruntime 默认按物理核开线程池、
+ * 且线程空闲时自旋等活——监听一直有声音时几十个核都在空转（实测默认 30 核，
+ * 单线程关自旋 0.05 核，单帧延迟还略低）。AED 单线程跑 60 秒块也只要 0.4 秒。
+ */
+export const FIRERED_SESSION_OPTIONS: OrtSessionOptions = {
+  intraOpNumThreads: 1,
+  interOpNumThreads: 1,
+  executionMode: 'sequential',
+  extra: {
+    session: {
+      intra_op: { allow_spinning: '0' },
+      inter_op: { allow_spinning: '0' },
+    },
+  },
+};
 
 /** 加载 ONNX 运行时；失败时讲清楚装没装。 */
 export function loadOnnxRuntime(): OrtModule {
@@ -272,7 +297,7 @@ export class FireRedSegmenter implements Segmenter {
     this.chain = (async () => {
       if (this.session && this.ort) return;
       const ort = opts.ort ?? loadOnnxRuntime();
-      const session = await ort.InferenceSession.create(opts.modelPath);
+      const session = await ort.InferenceSession.create(opts.modelPath, FIRERED_SESSION_OPTIONS);
       this.ort = ort;
       this.session = session;
     })();

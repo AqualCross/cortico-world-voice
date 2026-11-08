@@ -8,7 +8,7 @@
 import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { KaldiFbank, applyCmvn, cmvnFromMatrix, parseCmvnMatrix, type Cmvn } from './fbank.ts';
-import { loadOnnxRuntime, type OrtModule, type OrtSession } from './firered.ts';
+import { FIRERED_SESSION_OPTIONS, loadOnnxRuntime, type OrtModule, type OrtSession } from './firered.ts';
 
 export const FIRERED_AED_FILE = 'fireredvad_aed.onnx';
 const AED_MIN_BYTES = 1_000_000;
@@ -52,7 +52,7 @@ export class FireRedAedClassifier {
     if (!opts.modelPath) throw new Error('FireRed AED 需要模型路径。');
     if (!opts.cmvnPath && !opts.cmvn) throw new Error('FireRed AED 需要 cmvn.ark。');
     const ort = opts.ort ?? loadOnnxRuntime();
-    const session = opts.session ?? await ort.InferenceSession.create(opts.modelPath);
+    const session = opts.session ?? await ort.InferenceSession.create(opts.modelPath, FIRERED_SESSION_OPTIONS);
     const cmvn = opts.cmvn ?? cmvnFromMatrix(parseCmvnMatrix(readFileSync(opts.cmvnPath!)));
     return new FireRedAedClassifier(ort, session, cmvn);
   }

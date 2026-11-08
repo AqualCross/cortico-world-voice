@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { AED_LABELS, FireRedAedClassifier, aedReady, FIRERED_AED_FILE } from '../src/firered-aed.ts';
-import type { OrtModule, OrtSession } from '../src/firered.ts';
+import { FIRERED_SESSION_OPTIONS, type OrtModule, type OrtSession } from '../src/firered.ts';
 import { mkdtempSync, rmSync, truncateSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -53,6 +53,21 @@ describe('FireRed AED', () => {
     const result = await classify([[0.02, 0.02, 0.96]]);
     expect(result.label).toBe('music');
     expect(result.voice).toBe(0);
+  });
+
+  it('自建会话时限定单线程并关自旋', async () => {
+    let seen: unknown;
+    const ort = {
+      Tensor: class {} as unknown as OrtModule['Tensor'],
+      InferenceSession: {
+        create: async (_path: string, options?: unknown) => {
+          seen = options;
+          return { run: async () => ({}) } as unknown as OrtSession;
+        },
+      },
+    };
+    await FireRedAedClassifier.create({ modelPath: 'x.onnx', cmvn: CMVN, ort });
+    expect(seen).toEqual(FIRERED_SESSION_OPTIONS);
   });
 
   it('模型在不在看体积下限', () => {

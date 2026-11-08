@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync, rmSync, truncateSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { FIRERED_CMVN_FILE, FIRERED_MODEL_FILE, FireRedSegmenter, fireRedReady, type OrtModule, type OrtSession } from '../src/firered.ts';
+import { FIRERED_CMVN_FILE, FIRERED_MODEL_FILE, FIRERED_SESSION_OPTIONS, FireRedSegmenter, fireRedReady, type OrtModule, type OrtSession } from '../src/firered.ts';
 import { KaldiFbank } from '../src/fbank.ts';
 import type { Utterance, VadParams } from '../src/vad.ts';
 
@@ -105,6 +105,22 @@ describe('FireRed 切分器', () => {
     seg.tick(at + 400);
     await seg.whenIdle();
     expect(out).toHaveLength(1);
+  });
+
+  it('自建会话时限定单线程并关自旋', async () => {
+    let seen: unknown;
+    const ort = {
+      Tensor: class {} as unknown as OrtModule['Tensor'],
+      InferenceSession: {
+        create: async (_path: string, options?: unknown) => {
+          seen = options;
+          return { run: async () => ({}) } as unknown as OrtSession;
+        },
+      },
+    };
+    const seg = new FireRedSegmenter(PARAMS, { modelPath: 'x.onnx', cmvn: CMVN, ort });
+    await seg.whenIdle();
+    expect(seen).toEqual(FIRERED_SESSION_OPTIONS);
   });
 
   it('模型两个文件都在才算就绪', () => {
