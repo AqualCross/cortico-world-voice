@@ -119,6 +119,8 @@ export function dashscopeAudio(body: unknown): { url?: string; data?: Buffer } {
     : `接口没给音频：${snippet(JSON.stringify(body ?? {}))}`);
 }
 
+export type CloudStage = 'request' | 'response' | 'download' | 'failed';
+
 export interface CloudSpeechOptions {
   engine: 'dashscope' | 'openai';
   apiKey: string;
@@ -132,6 +134,8 @@ export interface CloudSpeechOptions {
   fetchImpl?: FetchLike;
   signal?: AbortSignal;
   timeoutMs?: number;
+  /** 诊断：每走完一个请求阶段回报一次；卡住时能看出停在哪一段、等了多久。 */
+  onStage?: (stage: CloudStage, detail: Record<string, unknown>) => void;
 }
 
 const single = (bytes: Buffer): AsyncGenerator<Buffer> => (async function* () { yield bytes; })();
@@ -166,30 +170,59 @@ export async function synthesizeCloudStream(opts: CloudSpeechOptions): Promise<E
       languageHints: opts.openai.languageHints,
     });
 
-  const res = await fetchImpl(request.url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${opts.apiKey}` },
-    body: JSON.stringify(request.body),
-    signal,
-  });
-  if (!res.ok) throw new CloudError(res.status, `接口返回 ${res.status}：${snippet(await res.text())}`);
+  const host = new URL(request.url).host;
+  const startedAt = Date.now();
+  let stage: CloudStage = 'request';
+  const report = (next: CloudStage, detail: Record<string, unknown> = {}): void => {
+    stage = next;
+    opts.onStage?.(next, {
+      engine: opts.engine,
+      host,
+      chars: opts.text.length,
+      elapsedMs: Date.now() - startedAt,
+      ...detail,
+    });
+  };
 
-  if (opts.engine === 'openai') {
-    const effective = (OPENAI_TTS_FORMATS as readonly string[]).includes(String(opts.format ?? '').toLowerCase())
-      ? String(opts.format).toLowerCase()
-      : 'mp3';
-    if (res.body) return { format: effective, chunks: readBody(res.body) };
-    const bytes = Buffer.from(await res.arrayBuffer());
-    if (!bytes.length) throw new CloudError(null, '接口返回的音频是空的');
-    return { format: effective, chunks: single(bytes) };
+  try {
+    report('request', { voice: opts.voice, format });
+    const res = await fetchImpl(request.url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${opts.apiKey}` },
+      body: JSON.stringify(request.body),
+      signal,
+    });
+    report('response', { status: res.status });
+    if (!res.ok) throw new CloudError(res.status, `接口返回 ${res.status}：${snippet(await res.text())}`);
+
+    if (opts.engine === 'openai') {
+      const effective = (OPENAI_TTS_FORMATS as readonly string[]).includes(String(opts.format ?? '').toLowerCase())
+        ? String(opts.format).toLowerCase()
+        : 'mp3';
+      if (res.body) return { format: effective, chunks: readBody(res.body) };
+      const bytes = Buffer.from(await res.arrayBuffer());
+      if (!bytes.length) throw new CloudError(null, '接口返回的音频是空的');
+      return { format: effective, chunks: single(bytes) };
+    }
+    const audio = dashscopeAudio(await res.json());
+    if (audio.data) return { format, chunks: single(audio.data) };
+    const downloadHost = new URL(audio.url!).host;
+    report('download', { downloadHost });
+    const download = await fetchImpl(audio.url!, { signal });
+    report('download', { downloadHost, status: download.status });
+    if (!download.ok) throw new CloudError(download.status, `下载生成的语音失败：HTTP ${download.status}`);
+    const bytes = Buffer.from(await download.arrayBuffer());
+    if (!bytes.length) throw new CloudError(null, '下载到的语音是空的');
+    return { format, chunks: single(bytes) };
+  } catch (err) {
+    report('failed', {
+      stage,
+      // 自己的 60 秒守卫到点，和队列取消要分开看。
+      timeout: signal.aborted && !opts.signal?.aborted,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
   }
-  const audio = dashscopeAudio(await res.json());
-  if (audio.data) return { format, chunks: single(audio.data) };
-  const download = await fetchImpl(audio.url!, { signal });
-  if (!download.ok) throw new CloudError(download.status, `下载生成的语音失败：HTTP ${download.status}`);
-  const bytes = Buffer.from(await download.arrayBuffer());
-  if (!bytes.length) throw new CloudError(null, '下载到的语音是空的');
-  return { format, chunks: single(bytes) };
 }
 
 /** 整句合成（silent 与兜底用）；内部仍是流，收齐再返回。 */

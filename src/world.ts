@@ -2112,6 +2112,9 @@ export class AudioWorld implements World {
       instruction: instruction?.trim() || cfg.speak.dashscope.instruction,
       seed: engine === 'dashscope' && cfg.speak.dashscope.seed >= 0 ? cfg.speak.dashscope.seed : undefined,
       signal,
+      onStage: (stage, detail) => {
+        this.host?.log.info('说话请求', { stage, ...detail });
+      },
       dashscope: {
         baseUrl: cfg.speak.dashscope.baseUrl,
         model: cfg.speak.dashscope.model,
