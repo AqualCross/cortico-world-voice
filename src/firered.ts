@@ -66,9 +66,14 @@ export const FIRERED_SESSION_OPTIONS: OrtSessionOptions = {
   },
 };
 
-/** 加载 ONNX 运行时；失败时讲清楚装没装。 */
+/**
+ * 加载 ONNX 运行时；失败时讲清楚装没装。
+ * Windows 按模块名复用进程内已加载的同名 onnxruntime.dll：先载入 sherpa-onnx-node（1.28.2），
+ * 再由 onnxruntime-node@1.17.0 从同一份 DLL 取 ORT_API_VERSION=17（向下兼容），避免加载顺序反过来让 sherpa 拿到旧版 DLL。
+ */
 export function loadOnnxRuntime(): OrtModule {
   try {
+    try { require('sherpa-onnx-node'); } catch { /* 缺 sherpa 时仍按各自 DLL 载入 */ }
     return require('onnxruntime-node') as OrtModule;
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);

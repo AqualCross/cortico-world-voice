@@ -1,10 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, rmSync, truncateSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { FIRERED_CMVN_FILE, FIRERED_MODEL_FILE, FIRERED_SESSION_OPTIONS, FireRedSegmenter, fireRedReady, type OrtModule, type OrtSession } from '../src/firered.ts';
+import { FIRERED_CMVN_FILE, FIRERED_MODEL_FILE, FIRERED_SESSION_OPTIONS, FireRedSegmenter, fireRedReady, loadOnnxRuntime, type OrtModule, type OrtSession } from '../src/firered.ts';
 import { KaldiFbank } from '../src/fbank.ts';
 import type { Utterance, VadParams } from '../src/vad.ts';
+
+const require = createRequire(import.meta.url);
 
 const CACHE_SIZE = 8 * 1 * 128 * 19;
 
@@ -121,6 +124,21 @@ describe('FireRed 切分器', () => {
     const seg = new FireRedSegmenter(PARAMS, { modelPath: 'x.onnx', cmvn: CMVN, ort });
     await seg.whenIdle();
     expect(seen).toEqual(FIRERED_SESSION_OPTIONS);
+  });
+
+  it('onnxruntime-node 不带 postinstall 脚本，且与 sherpa-onnx-node 同进程并存', () => {
+    const ortPkg = JSON.parse(readFileSync(require.resolve('onnxruntime-node/package.json'), 'utf8')) as {
+      version: string;
+      scripts?: Record<string, string>;
+    };
+    expect(ortPkg.version).toBe('1.17.0');
+    expect(ortPkg.scripts?.postinstall).toBeUndefined();
+    expect(ortPkg.scripts?.install).toBeUndefined();
+
+    const ort = loadOnnxRuntime();
+    expect(typeof ort.InferenceSession?.create).toBe('function');
+    const sherpa = require('sherpa-onnx-node') as { onnxruntimeVersion: string };
+    expect(sherpa.onnxruntimeVersion).not.toBe('1.17.0');
   });
 
   it('模型两个文件都在才算就绪', () => {
