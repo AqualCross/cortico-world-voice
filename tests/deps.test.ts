@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { parseNvidiaSmi, tierFor, CUDA_MIN_VRAM_MB } from '../src/gpu.ts';
 import { parseUvVersion, UV_VERSION, UV_ZIP_BYTES, UV_ZIP_SHA256, UV_ZIP_SOURCES } from '../src/uv.ts';
-import { FFMPEG_BUILD, FFMPEG_ZIP_BYTES, FFMPEG_ZIP_SHA256, FFMPEG_ZIP_SOURCES } from '../src/ffmpeg.ts';
+import { FFMPEG_CHECKSUM_SOURCES, FFMPEG_ZIP_SOURCES } from '../src/ffmpeg.ts';
 import { missingWeights, isProjectDir, projectDir, weightsDir, ProjectEnvJob } from '../src/install.ts';
 import { FIRERED_VAD_FILES, TIER_WEIGHTS } from '../src/catalog.ts';
 import { Job } from '../src/jobs.ts';
@@ -47,14 +47,17 @@ describe('uv 识别', () => {
     expect(parseUvVersion('nonsense')).toBe(null);
   });
 
-  it('下载地址钉住版本与哈希，不用 releases/latest', () => {
-    for (const url of [...UV_ZIP_SOURCES, ...FFMPEG_ZIP_SOURCES]) expect(url).not.toContain('/latest/');
-    expect(UV_ZIP_SOURCES.every((url) => url.includes(`/uv/releases/download/${UV_VERSION}/`))).toBe(true);
-    expect(FFMPEG_ZIP_SOURCES.every((url) => url.includes(`/FFmpeg-Builds/releases/download/${FFMPEG_BUILD}/`))).toBe(true);
+  it('uv 钉版本与哈希；BtbN 走 latest 并在安装时现取校验和', () => {
+    for (const url of UV_ZIP_SOURCES) {
+      expect(url).not.toContain('/latest/');
+      expect(url).toContain(`/uv/releases/download/${UV_VERSION}/`);
+    }
+    for (const url of [...FFMPEG_ZIP_SOURCES, ...FFMPEG_CHECKSUM_SOURCES]) {
+      expect(url).toContain('/FFmpeg-Builds/releases/download/latest/');
+    }
+    expect(FFMPEG_CHECKSUM_SOURCES.every((url) => url.endsWith('/checksums.sha256'))).toBe(true);
     expect(UV_ZIP_SHA256).toMatch(/^[a-f0-9]{64}$/);
-    expect(FFMPEG_ZIP_SHA256).toMatch(/^[a-f0-9]{64}$/);
     expect(UV_ZIP_BYTES).toBeGreaterThan(0);
-    expect(FFMPEG_ZIP_BYTES).toBeGreaterThan(0);
   });
 });
 

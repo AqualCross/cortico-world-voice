@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { parseFfmpegVersion, resolveOnPath } from '../src/ffmpeg.ts';
+import { parseChecksums, parseFfmpegVersion, resolveOnPath } from '../src/ffmpeg.ts';
 
 describe('ffmpeg 检测', () => {
   it('从 -version 输出里取版本号', () => {
@@ -25,5 +25,13 @@ describe('ffmpeg 检测', () => {
   it('PATH 上没有就返回 null，不猜固定目录', () => {
     expect(resolveOnPath('ffmpeg', { PATH: join(tmpdir(), 'no-such-dir'), PATHEXT: '.EXE' })).toBe(null);
     expect(resolveOnPath('ffmpeg', {})).toBe(null);
+  });
+
+  it('从 checksums.sha256 里挑出对应文件', () => {
+    const a = 'a'.repeat(64);
+    const text = [`${a}  ffmpeg-master-latest-win64-gpl.zip`, 'not a checksum line'].join('\r\n');
+    expect(parseChecksums(text, 'ffmpeg-master-latest-win64-gpl.zip')).toBe(a);
+    expect(parseChecksums(text, 'ffmpeg-master-latest-winarm64-gpl.zip')).toBe(null);
+    expect(parseChecksums('', 'x')).toBe(null);
   });
 });
