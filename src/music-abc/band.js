@@ -2,9 +2,11 @@
  * The band: groove patterns and a deterministic arranger for ABC lead sheets.
  *
  * The written ABC supplies melody, optional counter-lines and quoted chord names.
- * This module turns the chord names into comp, bass and drum parts in the style of
- * cortico-world-compose's `grooves.ts` / `arrange.ts` (MIT), but keeps the output in
- * quarter-note positions so it can be merged into the abcjs MIDI.
+ * This module turns the chord names into comp, bass and drum parts adapted from
+ * cortico-world-compose's `grooves.ts` / `arrange.ts` (MIT, Copyright (c) 2026
+ * Phantivia, https://github.com/Phantivia/cortico-world-compose), but keeps the
+ * output in quarter-note positions so it can be merged into the abcjs MIDI.
+ * See licenses/cortico-world-compose-MIT.txt.
  */
 import { bassRoot, parseChord, voiceChord } from './theory.js';
 

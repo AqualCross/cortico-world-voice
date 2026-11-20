@@ -159,6 +159,10 @@ SenseVoice 的情感与音频事件（笑声、掌声、背景音乐等）跟正
 - **卸载**：本扩展装过的行会多一个「卸载」按钮，确认后先停掉占用文件的子进程，再删本扩展写进部署目录的东西；
   系统里已有的 uv / ffmpeg、用户导入的音色与声库、已生成的音频记录都不动。安装任务进行中不能卸载。
 
+## 致谢
+
+- [cortico-world-compose](https://github.com/Phantivia/cortico-world-compose)（MIT，Copyright (c) 2026 Phantivia）：`src/music-abc/band.js` 的律动型与 band 编曲器改编自它的 `src/grooves.ts` / `src/arrange.ts`，按 ABC 的四分音符网格重写并合并进 abcjs MIDI。完整许可见 `licenses/cortico-world-compose-MIT.txt`。
+
 ## 约定
 
 - id：`audio`；包名 `cortico-world-voice`（npm 上的 `cortico-world-audio` 被别人占用）；配置键 `worlds.audio.*`；
