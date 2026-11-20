@@ -5,6 +5,9 @@ export const TOOLS: ReadonlyArray<Omit<ToolDef, 'handler'>>;
 export interface AbcConfig {
   enabled?: boolean;
   instrument: string;
+  backing?: 'off' | 'abcjs' | 'band';
+  groove?: string;
+  energy?: number;
   delivery: 'return' | 'event';
   eventDelivery: 'archive' | 'model';
 }

@@ -21,6 +21,16 @@ let scratchDir: string;
 beforeEach(() => { scratchDir = mkdtempSync(join(tmpdir(), 'audio-')); });
 afterEach(() => rmSync(scratchDir, { recursive: true, force: true }));
 
+const deepMerge = (base: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> => {
+  for (const [key, value] of Object.entries(patch)) {
+    const cur = base[key];
+    base[key] = value && typeof value === 'object' && !Array.isArray(value) && cur && typeof cur === 'object'
+      ? deepMerge(cur as Record<string, unknown>, value as Record<string, unknown>)
+      : value;
+  }
+  return base;
+};
+
 describe('Audio World', () => {
   it('干装载不报失败：装载器会接受它', async () => {
     const report = await dryMountWorld(AUDIO, { scratchDir });
@@ -45,6 +55,24 @@ describe('Audio World', () => {
     expect(text).toContain('文本转语音');
     expect(text).not.toContain('还没有接入任何引擎');
     expect(text).toContain('监听：没有勾选的来源');
+  });
+
+  it('audio_idle：status 报默认值，set 验收写回，坏值给提示', async () => {
+    const ctx = fakeWorldContext(AUDIO, { scratchDir });
+    ctx.persist = (patch) => { deepMerge(ctx.cfg as unknown as Record<string, unknown>, patch as Record<string, unknown>); };
+    const world = AUDIO.create(ctx);
+    const idle = world.tools().find((t) => t.name === 'audio_idle')!;
+    const status = String(await idle.handler({ action: 'status' }, {} as ToolCallContext));
+    expect(status).toContain('GPT-SoVITS 5');
+    expect(status).toContain('SenseVoice 10');
+    expect(status).toContain('RVC 5');
+    expect(status).toContain('DiffSinger 5');
+    const set = String(await idle.handler({ action: 'set', engine: 'rvc', minutes: 0 }, {} as ToolCallContext));
+    expect(set).toContain('0 minutes');
+    expect((ctx.cfg as unknown as { convert: { idleMinutes: number } }).convert.idleMinutes).toBe(0);
+    expect(String(await idle.handler({ action: 'set', engine: 'rvc', minutes: 999 }, {} as ToolCallContext))).toContain('[audio_idle failed]');
+    expect(String(await idle.handler({ action: 'set', engine: 'nope', minutes: 1 }, {} as ToolCallContext))).toContain('[audio_idle not run]');
+    await world.stop();
   });
   it('面板顺序：依赖、说话、听、音乐、工具；播放与记录收进说话/听的二级页', async () => {
     const world = AUDIO.create(fakeWorldContext(AUDIO, { scratchDir }));
@@ -365,6 +393,13 @@ describe('Audio World', () => {
     await play.handler({ path: file, balance: 140 }, {} as ToolCallContext);
     const snap = (world as unknown as { queue: { snapshot(): { current: { balance: number } | null } } }).queue.snapshot();
     expect(snap.current?.balance).toBe(100);
+  });
+
+  it('audio_open 对不存在的文件只回执，不拉起播放器', async () => {
+    const world = AUDIO.create(fakeWorldContext(AUDIO, { scratchDir }));
+    const open = world.tools().find((tool) => tool.name === 'audio_open')!;
+    const out = await open.handler({ path: join(scratchDir, 'missing.wav') }, {} as ToolCallContext);
+    expect(String(out)).toContain('没有这个文件');
   });
 
   it('audio_say 把左右平衡记到这一句上并掐到范围内', async () => {

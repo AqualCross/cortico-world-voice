@@ -40,7 +40,7 @@ interface ListenState {
     context: string;
     sampleRate: number;
     maxMb: number;
-    sensevoice: { modelDir: string };
+    sensevoice: { modelDir: string; idleMinutes: number };
     moonshine: { modelDir: string };
     dashscope: { baseUrl: string; model: string; apiKeySecret: string; itn: boolean; keepDialect: boolean };
     openai: { baseUrl: string; model: string; apiKeySecret: string };
@@ -128,6 +128,7 @@ const TEXT = {
     streamMissingNote: '模型还没下载：去「依赖」页对「Paraformer 流式」点「获取」（约 226 MB）。在那之前把某一路切成「流式转文本」，那一路会明确报缺模型。',
     legacyEngine: '配置里还是 Moonshine（已停用）：它只能离线识别，选一个引擎会写回配置。',
     engine: '引擎',
+    idleMinutes: '闲置分钟',
     langHint: '语言提示',
     context: '识别上下文',
     sampleRate: '采样率（0 自动）',
@@ -191,6 +192,7 @@ const TEXT = {
     streamMissingNote: 'Model not downloaded: press Get on "Paraformer streaming" on the Dependencies page (~226 MB). Until then a Streaming source reports the missing model.',
     legacyEngine: 'Config still says Moonshine (retired): it is offline-only; picking an engine writes it back.',
     engine: 'Engine',
+    idleMinutes: 'Idle minutes',
     langHint: 'Language hint',
     context: 'Context',
     sampleRate: 'Sample rate (0 = auto)',
@@ -656,6 +658,9 @@ export const listenPanel: WebUiPanel = {
         render();
       })));
       if (legacy) root.append(el('div', 'aud-note', t.legacyEngine));
+      if (state.stt.engine === 'sensevoice') {
+        root.append(field(t.idleMinutes, slider(state.stt.sensevoice.idleMinutes, { min: 0, max: 120, step: 1 }, (v) => save('stt.sensevoice.idleMinutes', v), (v) => String(v))));
+      }
       root.append(field(t.langHint, textInput(state.stt.langHint, (v) => save('stt.langHint', v))));
       root.append(field(t.context, textInput(state.stt.context, (v) => save('stt.context', v))));
       root.append(field(t.sampleRate, numberInput(state.stt.sampleRate, { min: 0, max: 48000, step: 1000 }, (v) => save('stt.sampleRate', v))));

@@ -220,6 +220,19 @@ export const AUDIO_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
     },
   },
   {
+    name: 'audio_open',
+    description: 'Open an audio file in the computer\'s default player application, where the person can pause, seek and replay it themselves. Accepts a local path or a log:/mem: blob handle. This does not use the playback queue.',
+    tags: ['act'],
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        path: { type: 'string', description: 'Absolute path to the audio file; give this or handle.' },
+        handle: { type: 'string', description: 'A log:/mem: blob handle for the audio; give this or path.' },
+      },
+    },
+  },
+  {
     name: 'audio_say',
     description: 'Say a line with the configured speech engine and play it through the audio queue. Returns at once: synthesis and playback run in the background, and only a failure comes back as an audio.failed event. With silent=true it synthesizes in the background without playback and the file path comes back as an audio.say_done event.',
     tags: ['speak'],
@@ -323,6 +336,21 @@ export const AUDIO_TOOL_DECLS: ReadonlyArray<Omit<ToolDef, 'handler'>> = [
       } } }, required: ['tracks'],
     },
   },
+  {
+    name: 'audio_idle',
+    description: 'Read or set how many minutes each local engine stays loaded while idle before its worker process exits: gpt-sovits (speech), sensevoice (transcription), rvc (conversion), diffsinger (singing). 0 keeps the process resident. A set applies immediately to a running process without restarting it.',
+    tags: ['act'],
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        action: { type: 'string', enum: ['status', 'set'], description: 'status reports all four values; set changes one engine.' },
+        engine: { type: 'string', enum: ['gpt-sovits', 'sensevoice', 'rvc', 'diffsinger'], description: 'Which local engine to set (only for action=set).' },
+        minutes: { type: 'number', minimum: 0, maximum: 120, description: 'Idle minutes, 0-120; 0 keeps the process resident (only for action=set).' },
+      },
+      required: ['action'],
+    },
+  },
   ...ABC_TOOLS,
 ];
 
@@ -337,7 +365,9 @@ function decl(name: string): Omit<ToolDef, 'handler'> {
 export const TOOL_SUMMARIES: Readonly<Record<string, { zh: string; en: string }>> = {
   audio_status: { zh: '报告语音能力此刻的接入状态。', en: 'Reports which audio capabilities are wired up right now.' },
   audio_listen: { zh: '开始、停止或查看本机声音监听。', en: 'Starts, stops or inspects hearing.' },
+  audio_idle: { zh: '查看或调整本地模型闲置多久自动退出。', en: 'Reads or sets how long local models stay loaded while idle.' },
   audio_play: { zh: '播放一个音频文件，后面的排队。', en: 'Plays an audio file; later requests queue up.' },
+  audio_open: { zh: '用系统默认播放器打开一个音频文件。', en: 'Opens an audio file in the system default player.' },
   audio_say: { zh: '按当前引擎合成一句话并播放。', en: 'Synthesizes a line with the current engine and plays it.' },
   audio_convert: { zh: '把一段音频换成当前变声音色，转完自动播放。', en: 'Converts an audio file into the configured voice and plays it.' },
   audio_sing: { zh: '用 DiffSinger 把歌词唱出来并播放。', en: 'Sings lyrics with DiffSinger and plays the song.' },
@@ -345,9 +375,9 @@ export const TOOL_SUMMARIES: Readonly<Record<string, { zh: string; en: string }>
   audio_queue: { zh: '查看或改动播放队列。', en: 'Inspect or change the playback queue.' },
   audio_separate: { zh: '把歌曲分成人声和伴奏。', en: 'Separate a song into vocals and accompaniment.' },
   audio_mix: { zh: '按音量和时间偏移混合多条音轨。', en: 'Mix tracks with individual levels and start offsets.' },
-  audio_abc_music_score: { zh: '检查、保存与读取 ABC 曲谱和版本。', en: 'Validate, save and read ABC scores.' },
-  audio_abc_music_play: { zh: '把 ABC 曲谱渲染为采样音源 WAV，并保存作品。', en: 'Render ABC to sampled audio and retain a score snapshot.' },
-  audio_abc_music_control: { zh: '列出音源预设、查看状态或设置乐器与交付方式。', en: 'List SoundFont presets, read status or configure instruments and delivery.' },
+  audio_abc_music_score: { zh: '检查、保存与读取 ABC 曲谱、版本和草稿。', en: 'Validate, save and read ABC scores and drafts.' },
+  audio_abc_music_play: { zh: '把 ABC 曲谱渲染为采样音源 WAV，回执带测量结果，并保存作品。', en: 'Render ABC to sampled audio, retain a score snapshot and report measured facts.' },
+  audio_abc_music_control: { zh: '列出音源预设、查看状态或设置乐器、伴奏与交付方式。', en: 'List SoundFont presets, read status or configure instruments, backing and delivery.' },
 };
 
 /** uv 的安装任务；识别到本机已有 uv 时 present() 直接为真。 */
@@ -586,7 +616,7 @@ export class AudioWorld implements World {
     const key = `${setup.projectDir}|${setup.device}|${setup.gpuIndex}|${setup.version}`;
     if (this.sovits && this.sovitsKey === key) return this.sovits;
     void this.sovits?.stop();
-    this.sovits = new GptSovitsService(setup);
+    this.sovits = new GptSovitsService(setup, { idleMs: () => this.opts.cfg.speak.gptSovits.idleMinutes * 60_000 });
     this.sovitsKey = key;
     return this.sovits;
   }
@@ -604,6 +634,7 @@ export class AudioWorld implements World {
     const client = new LocalAsr({
       command: envPython(asrEnvDir(this.roots)),
       args: [fileURLToPath(new URL('../python/sensevoice_asr.py', import.meta.url)), modelDir, '2'],
+      idleMs: () => this.opts.cfg.stt.sensevoice.idleMinutes * 60_000,
     });
     this.asr = { modelDir, client };
     return client;
@@ -618,6 +649,7 @@ export class AudioWorld implements World {
     const handlers: Array<ToolDef['handler']> = [
       this.statusTool().handler!,
       this.playTool().handler!,
+      this.openTool().handler!,
       this.sayTool().handler!,
       this.convertTool().handler!,
       this.singTool().handler!,
@@ -632,6 +664,7 @@ export class AudioWorld implements World {
         try { const task = this.music.mix(args.tracks, 'tool'); return `已开始混音 ${task.id}；完成后以 audio.mixed 带回文件路径。`; }
         catch (error) { return `[audio_mix 没执行] ${error instanceof Error ? error.message : String(error)}`; }
       },
+      this.idleTool().handler!,
       ...this.abc.tools().map((tool) => tool.handler),
     ];
     const byName = new Map(AUDIO_TOOL_DECLS.map((tool, index) => [tool.name, handlers[index]]));
@@ -789,7 +822,7 @@ export class AudioWorld implements World {
       if (method === 'file') return this.music.file(String(args[0]), Number(args[1] ?? 0));
       if (method === 'abc') {
         const [abcPanel, abcMethod, abcArgs = []] = args;
-        if (!['scores', 'works', 'instruments'].includes(String(abcPanel)) || !Array.isArray(abcArgs)) throw new Error('未知 ABC 面板。');
+        if (!['scores', 'arrange', 'works', 'instruments'].includes(String(abcPanel)) || !Array.isArray(abcArgs)) throw new Error('未知 ABC 面板。');
         return this.abc.invoke(String(abcPanel), String(abcMethod), abcArgs);
       }
       throw new Error(`未知音乐方法：${method}`);
@@ -1649,6 +1682,7 @@ export class AudioWorld implements World {
         // 上游用 ffmpeg 解输入音频，把本 World 自己那份放到子进程 PATH 前面。
         ...(ffmpegDir ? { PATH: `${ffmpegDir}${delimiter}${process.env.PATH ?? ''}` } : {}),
       },
+      idleMs: () => this.opts.cfg.convert.idleMinutes * 60_000,
     });
     this.rvcCache = { key, engine };
     return engine;
@@ -1798,6 +1832,7 @@ export class AudioWorld implements World {
       args: [fileURLToPath(new URL('../python/diffsinger_worker.py', import.meta.url)), bankPath],
       // 推理在 CPU 上跑：线程压到 4，唱的时候别把整机占满。
       env: { OMP_NUM_THREADS: '4' },
+      idleMs: () => this.opts.cfg.sing.idleMinutes * 60_000,
     });
     this.singCache = { key, engine };
     return engine;
@@ -1962,7 +1997,48 @@ export class AudioWorld implements World {
     }
     cursor[parts[parts.length - 1]] = value;
     this.opts.persist(patch as never);
+    if (parts[parts.length - 1] === 'idleMinutes') this.refreshIdleTimers();
     return { ok: true, key, value };
+  }
+
+  /** 闲置分钟热改：在跑的进程立刻按新值重算计时。 */
+  private refreshIdleTimers(): void {
+    this.sovits?.refreshIdle();
+    this.asr?.client.refreshIdle();
+    this.rvcCache?.engine.refreshIdle();
+    this.singCache?.engine.refreshIdle();
+  }
+
+  /** 闲置分钟：报四个值或改一个；写走 schema 验收并热重置计时。 */
+  private idleTool(): ToolDef {
+    const keys = {
+      'gpt-sovits': 'speak.gptSovits.idleMinutes',
+      sensevoice: 'stt.sensevoice.idleMinutes',
+      rvc: 'convert.idleMinutes',
+      diffsinger: 'sing.idleMinutes',
+    } as const;
+    return {
+      ...decl('audio_idle'),
+      handler: async (args) => {
+        const action = String(args.action ?? '').trim().toLowerCase();
+        const cfg = this.opts.cfg;
+        if (action === 'status') {
+          return `Idle minutes: GPT-SoVITS ${cfg.speak.gptSovits.idleMinutes}, SenseVoice ${cfg.stt.sensevoice.idleMinutes}, RVC ${cfg.convert.idleMinutes}, DiffSinger ${cfg.sing.idleMinutes} (0 = resident).`;
+        }
+        if (action === 'set') {
+          const engine = String(args.engine ?? '').trim().toLowerCase();
+          const key = keys[engine as keyof typeof keys];
+          if (!key) return '[audio_idle not run] engine must be gpt-sovits, sensevoice, rvc or diffsinger.';
+          try {
+            const saved = this.saveConfigValue(`worlds.audio.${key}`, args.minutes) as { value: number };
+            return `Set ${engine} idle to ${saved.value} minutes (0 = resident); a running process re-armed without restart.`;
+          } catch (err) {
+            return `[audio_idle failed] ${err instanceof Error ? err.message : String(err)}`;
+          }
+        }
+        return '[audio_idle not run] action must be status or set.';
+      },
+    };
   }
 
   /** 说话页：三组配置、参考音频与变声音色清点、声库、密钥是否已填、可选的显卡。 */
@@ -2060,6 +2136,31 @@ export class AudioWorld implements World {
         const balance = typeof args.balance === 'number' ? clampBalance(args.balance) : undefined;
         const { id, position } = this.queue.enqueue({ path, volume, balance, origin: 'tool' });
         return `已加入播放队列 ${id}（第 ${position} 条）：${path}`;
+      },
+    };
+  }
+
+  private openTool(): ToolDef {
+    return {
+      ...decl('audio_open'),
+      handler: async (args) => {
+        let path = '';
+        try {
+          path = this.inputFile(args);
+        } catch (err) {
+          return `[audio_open 没执行] ${err instanceof Error ? err.message : String(err)}`;
+        }
+        if (!existsSync(path)) return `[audio_open 没执行] 没有这个文件：${path}`;
+        const [command, commandArgs] = process.platform === 'win32'
+          ? ['cmd', ['/c', 'start', '', path]]
+          : process.platform === 'darwin' ? ['open', [path]] : ['xdg-open', [path]];
+        try {
+          const child = spawn(command, commandArgs, { detached: true, stdio: 'ignore', windowsHide: true });
+          child.unref();
+          return `已请系统用默认播放器打开：${path}`;
+        } catch (err) {
+          return `[audio_open 没执行] ${err instanceof Error ? err.message : String(err)}`;
+        }
       },
     };
   }

@@ -30,7 +30,7 @@ export class LocalAsr {
   private queue: Promise<unknown> = Promise.resolve();
   private exitedReason: string | null = null;
 
-  constructor(private readonly opts: { command: string; args: string[]; idleMs?: number; timeoutMs?: number }) {}
+  constructor(private readonly opts: { command: string; args: string[]; idleMs?: number | (() => number); timeoutMs?: number }) {}
 
   transcribe(pcm: Buffer): Promise<AsrResult> {
     const run = (): Promise<AsrResult> => this.send(pcm);
@@ -125,9 +125,17 @@ export class LocalAsr {
     });
   }
 
+  /** 配置热改后按新值重算闲置计时。 */
+  refreshIdle(): void {
+    this.touchIdle();
+  }
+
   private touchIdle(): void {
     this.clearIdle();
-    this.idle = setTimeout(() => this.kill(), this.opts.idleMs ?? 10 * 60_000);
+    const raw = typeof this.opts.idleMs === 'function' ? this.opts.idleMs() : this.opts.idleMs;
+    const ms = raw ?? 10 * 60_000;
+    if (ms <= 0) return;
+    this.idle = setTimeout(() => this.kill(), ms);
     this.idle.unref?.();
   }
 

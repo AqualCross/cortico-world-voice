@@ -281,11 +281,11 @@ describe('说话页', () => {
     speak: {
       engine: 'gpt-sovits', textLang: 'auto',
       edge: { voice: 'zh-CN-XiaoyiNeural', rate: 0, pitch: 0 },
-      gptSovits: { tier: 'auto', refAudio: '', refText: '', speed: 1 },
+      gptSovits: { tier: 'auto', refAudio: '', refText: '', speed: 1, idleMinutes: 5 },
       dashscope: { baseUrl: 'https://maas.qianwenaiapi.com', model: 'qwen-audio-3.1-tts-flash', voice: 'longanhuan_v3.1', apiKeySecret: 'AUDIO_API_KEY', format: 'wav', sampleRate: 24000, instruction: '', languageHints: '', seed: -1 },
       openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini-tts', voice: 'alloy', apiKeySecret: 'OPENAI_API_KEY', format: 'wav', sampleRate: 0, languageHints: '' },
     },
-    convert: { engine: 'rvc', model: '', pitch: 0, indexRate: 0.3, protect: 0.33 },
+    convert: { engine: 'rvc', model: '', pitch: 0, indexRate: 0.3, protect: 0.33, idleMinutes: 5 },
     timbres: [],
     refFile: '',
     rvcVoices: ['a.pth'],
@@ -293,7 +293,7 @@ describe('说话页', () => {
     rvcRuntime: { ready: true, voice: 'a.pth', missing: [], engine: { phase: 'stopped', device: null, model: null, detail: null } },
     lastConvert: null,
     banks: [],
-    sing: { engine: 'diffsinger', voicebank: '', color: '', bpm: 96, keyShift: 0, scale: 'major', seed: 0, convert: false },
+    sing: { engine: 'diffsinger', voicebank: '', color: '', bpm: 96, keyShift: 0, scale: 'major', seed: 0, convert: false, idleMinutes: 5 },
     singRuntime: { ready: true, bank: '', missing: [], engine: { phase: 'stopped', voicebank: null, sampleRate: null, speakers: [], detail: null } },
     lastSing: null,
     gpus: [
@@ -466,7 +466,7 @@ describe('听页', () => {
     },
     stt: {
       engine: 'sensevoice', langHint: '', context: '', sampleRate: 0, maxMb: 10,
-      sensevoice: { modelDir: '' },
+      sensevoice: { modelDir: '', idleMinutes: 10 },
       dashscope: { baseUrl: 'https://dashscope.aliyuncs.com', model: 'qwen3-asr-flash', apiKeySecret: 'AUDIO_API_KEY', itn: false, keepDialect: false },
       openai: { baseUrl: 'https://api.openai.com/v1', model: 'whisper-1', apiKeySecret: 'OPENAI_API_KEY' },
     },

@@ -3,8 +3,8 @@ import type { JobState } from '../jobs.ts';
 import type { MixTrack, MusicTask } from '../music-process.ts';
 import abcBundle from './abc/panels.js';
 
-type Tab = 'separate' | 'mix' | 'abc' | 'records';
-type AbcTab = 'scores' | 'works' | 'instruments';
+type Tab = 'separate' | 'mix' | 'scores' | 'arrange' | 'instruments' | 'records';
+type AbcPanel = 'scores' | 'arrange' | 'instruments';
 interface MusicState { separator: JobState; ffmpeg: boolean; tasks: MusicTask[] }
 
 const STYLE = `
@@ -31,7 +31,7 @@ const STYLE = `
 `;
 
 /** 每个内嵌面板有独立生命周期；切换二级页时停止试听、订阅和定时器。 */
-function childContext(parent: WebUiPanelContext, root: HTMLElement, panel: AbcTab): { ctx: WebUiPanelContext; dispose(): void } {
+function childContext(parent: WebUiPanelContext, root: HTMLElement, panel: AbcPanel): { ctx: WebUiPanelContext; dispose(): void } {
   const controller = new AbortController(), resources = new Set<{ dispose(): void }>();
   const dispose = (): void => {
     controller.abort();
@@ -44,12 +44,15 @@ function childContext(parent: WebUiPanelContext, root: HTMLElement, panel: AbcTa
     if (controller.signal.aborted) resource.dispose(); else resources.add(resource);
     return resource;
   };
+  // The Arrangement tab is a view over the Scores panel; the ABC world only exposes
+  // scores/works/instruments, so its invokes go to scores.
+  const serverPanel = panel === 'arrange' ? 'scores' : panel;
   const ctx: WebUiPanelContext = {
     ...parent, root, signal: controller.signal, panelId: panel,
     scope: { ...parent.scope, audioMusic: 'true' },
     own,
-    invoke: (method, args = []) => parent.invoke('abc', [panel, method, args]),
-    invokeBinary: (method, args = []) => parent.invokeBinary('abc', [panel, method, args]),
+    invoke: (method, args = []) => parent.invoke('abc', [serverPanel, method, args]),
+    invokeBinary: (method, args = []) => parent.invokeBinary('abc', [serverPanel, method, args]),
     memo: { get: (key, fallback) => parent.memo.get(`abc:${panel}:${key}`, fallback), set: (key, value) => parent.memo.set(`abc:${panel}:${key}`, value) },
     interval: (fn, ms) => own(parent.interval(() => { if (!controller.signal.aborted) fn(); }, ms)),
     timeout: (fn, ms) => own(parent.timeout(() => { if (!controller.signal.aborted) fn(); }, ms)),
@@ -67,6 +70,7 @@ export const musicPanel: WebUiPanel = {
     const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text = ''): HTMLElementTagNameMap[K] => {
       const node = doc.createElement(tag); node.className = cls; node.textContent = text; return node;
     };
+    const duration = (value: number): string => `${Number(value).toFixed(1)} s`;
     const style = el('style'); style.textContent = STYLE;
     ctx.root.append(style);
     const root = el('section', 'audio-music'), tabs = el('div', 'aud-tabs'), pane = el('section', 'music-pane');
@@ -74,10 +78,10 @@ export const musicPanel: WebUiPanel = {
     root.append(tabs, pane); ctx.root.append(root);
     let state = await ctx.invoke<MusicState>('state');
     let tab = ctx.memo.get<Tab>('musicTab', 'separate');
+    if ((tab as string) === 'abc') tab = 'scores';
     let nested: { dispose(): void } | null = null;
     let refreshPane: (() => void) | null = null;
     let tracks = ctx.memo.get<MixTrack[]>('mixTracks', []);
-    let abcTab = ctx.memo.get<AbcTab>('abcTab', 'scores');
     const persistTracks = (): void => ctx.memo.set('mixTracks', tracks);
     const run = async (method: string, args: unknown[] = []): Promise<void> => {
       try { state = await ctx.invoke<MusicState>(method, args); if (!ctx.signal.aborted) refreshPane?.(); }
@@ -95,7 +99,7 @@ export const musicPanel: WebUiPanel = {
     }, { signal: ctx.signal });
 
     const tabButtons = new Map<Tab, HTMLButtonElement>();
-    for (const [id, cn, en] of [['separate', '分离', 'Separate'], ['mix', '混音', 'Mix'], ['abc', 'ABC', 'ABC'], ['records', '记录', 'Records']] as const) {
+    for (const [id, cn, en] of [['separate', '分离', 'Separate'], ['mix', '混音', 'Mix'], ['scores', '作曲', 'Compose'], ['arrange', '编曲', 'Arrange'], ['instruments', '音源', 'Soundfonts'], ['records', '记录', 'Records']] as const) {
       const node = button(say(cn, en), () => show(id));
       node.className = 'aud-tab'; node.setAttribute('role', 'tab');
       node.id = `audio-music-${id}`;
@@ -113,28 +117,10 @@ export const musicPanel: WebUiPanel = {
         node.tabIndex = id === tab ? 0 : -1;
       }
       pane.setAttribute('role', 'tabpanel'); pane.setAttribute('aria-labelledby', `audio-music-${tab}`);
-      if (tab === 'abc') {
-        const navigation = el('div', 'aud-tabs'), content = el('div');
-        navigation.setAttribute('role', 'tablist'); navigation.setAttribute('aria-label', 'ABC');
-        const buttons = new Map<AbcTab, HTMLButtonElement>();
-        const mount = async (id: AbcTab): Promise<void> => {
-          nested?.dispose(); content.replaceChildren();
-          abcTab = id; ctx.memo.set('abcTab', id);
-          for (const [key, node] of buttons) {
-            node.className = key === id ? 'aud-tab on' : 'aud-tab';
-            node.setAttribute('aria-selected', String(key === id));
-            node.tabIndex = key === id ? 0 : -1;
-          }
-          const child = childContext(ctx, content, id);
-          nested = child;
-          await abcBundle.panels[id].mount(child.ctx);
-        };
-        for (const [id, cn, en] of [['scores', '乐谱', 'Scores'], ['works', '作品', 'Works'], ['instruments', '乐器', 'Instruments']] as const) {
-          const node = button(say(cn, en), () => mount(id));
-          node.className = 'aud-tab'; node.setAttribute('role', 'tab'); buttons.set(id, node); navigation.append(node);
-        }
-        pane.append(navigation, content);
-        await mount(buttons.has(abcTab) ? abcTab : 'scores');
+      if (tab === 'scores' || tab === 'arrange' || tab === 'instruments') {
+        const child = childContext(ctx, pane, tab);
+        nested = child;
+        await abcBundle.panels[tab].mount(child.ctx);
         return;
       }
       if (tab === 'records') {
@@ -146,48 +132,88 @@ export const musicPanel: WebUiPanel = {
         const audio = el('audio'); audio.controls = true; audio.hidden = true;
         let audioUrl = '';
         own(() => { audio.pause(); audio.removeAttribute('src'); if (audioUrl) URL.revokeObjectURL(audioUrl); });
-        const preview = async (task: MusicTask, index: number): Promise<void> => {
-          const blob = await ctx.invokeBinary('file', [task.id, index]);
+        let works: Array<Record<string, unknown>> = [];
+        let signature = '';
+        const playBlob = async (load: () => Promise<Blob>): Promise<void> => {
+          const blob = await load();
           if (controller.signal.aborted) return;
           audio.pause(); if (audioUrl) URL.revokeObjectURL(audioUrl);
           audioUrl = URL.createObjectURL(blob); audio.src = audioUrl; audio.hidden = false; await audio.play();
         };
+        const previewTask = (task: MusicTask, index: number): Promise<void> => playBlob(() => ctx.invokeBinary('file', [task.id, index]));
+        const previewWork = (work: Record<string, unknown>): Promise<void> => playBlob(() => ctx.invokeBinary('abc', ['works', 'file', [{ id: work.id, format: 'wav' }]]));
         const kindOf = (kind: MusicTask['kind']): string => kind === 'mix' ? say('混音', 'Mix') : say('分离', 'Separate');
-        let signature = '';
         const draw = (): void => {
           const tasks = state.tasks.filter((task) => task.phase === 'done');
-          const next = JSON.stringify(tasks);
+          const records = [
+            ...tasks.map((task) => ({ type: 'task' as const, at: task.createdAt, task })),
+            ...works.map((work) => ({ type: 'work' as const, at: String(work.createdAt ?? ''), work })),
+          ].sort((a, b) => b.at.localeCompare(a.at));
+          const next = JSON.stringify(records);
           if (signature === next) return;
           signature = next;
-          count.textContent = tasks.length ? say(`共 ${tasks.length} 项作品`, `${tasks.length} works`) : '';
+          count.textContent = records.length ? say(`共 ${records.length} 项记录`, `${records.length} records`) : '';
           history.replaceChildren();
-          if (!tasks.length) { history.append(ctx.ui.placeholder(say('还没有分离或混音的作品。', 'No separation or mix works yet.'))); return; }
-          for (const task of tasks) {
-            const card = el('article', 'music-result');
-            card.append(
-              el('div', 'music-title', task.title),
-              el('div', 'music-hint', `${kindOf(task.kind)} · ${new Date(task.createdAt).toLocaleString()}`),
-            );
-            for (const [index, output] of task.outputs.entries()) {
+          if (!records.length) { history.append(ctx.ui.placeholder(say('还没有音乐记录。', 'No music records yet.'))); return; }
+          for (const record of records) {
+            if (record.type === 'task') {
+              const task = record.task;
+              const card = el('article', 'music-result');
+              card.append(
+                el('div', 'music-title', task.title),
+                el('div', 'music-hint', `${kindOf(task.kind)} · ${new Date(task.createdAt).toLocaleString()}`),
+              );
+              for (const [index, output] of task.outputs.entries()) {
+                const row = el('div', 'music-row');
+                row.append(
+                  el('span', '', output.name),
+                  button(say('试听', 'Listen'), () => previewTask(task, index)),
+                  button(say('复制路径', 'Copy path'), () => navigator.clipboard.writeText(output.path)),
+                  button(say('加入混音', 'Add to mix'), () => addToMix([output.path])),
+                );
+                card.append(row, el('div', 'music-hint', output.path));
+              }
+              if (task.kind === 'separate') card.append(button(say('两轨加入混音', 'Mix both tracks'), () => addToMix(task.outputs.map((output) => output.path))));
+              card.append(button(say('移除记录', 'Remove record'), async () => {
+                if (await ctx.ui.confirm({ title: say('移除这条作品记录？', 'Remove this work record?'), body: say('已生成的音频文件仍会保留。', 'Generated audio files are kept.') })) await run('remove', [task.id]);
+              }));
+              history.append(card);
+            } else {
+              const work = record.work;
+              const card = el('article', 'music-result');
+              card.append(
+                el('div', 'music-title', String(work.title ?? '')),
+                el('div', 'music-hint', `${say('作曲', 'Compose')} · ${new Date(String(work.createdAt ?? '')).toLocaleString()} · ${duration(Number(work.seconds ?? 0))}`),
+              );
               const row = el('div', 'music-row');
               row.append(
-                el('span', '', output.name),
-                button(say('试听', 'Listen'), () => preview(task, index)),
-                button(say('复制路径', 'Copy path'), () => navigator.clipboard.writeText(output.path)),
-                button(say('加入混音', 'Add to mix'), () => addToMix([output.path])),
+                el('span', '', 'WAV'),
+                button(say('试听', 'Listen'), () => previewWork(work)),
+                button(say('复制路径', 'Copy path'), () => navigator.clipboard.writeText(String(work.path ?? ''))),
+                button(say('加入混音', 'Add to mix'), () => addToMix([String(work.path ?? '')])),
               );
-              card.append(row, el('div', 'music-hint', output.path));
+              card.append(row, el('div', 'music-hint', String(work.path ?? '')), button(say('移除记录', 'Remove record'), async () => {
+                if (await ctx.ui.confirm({ title: say('移除这条作品记录？', 'Remove this work record?'), body: String(work.title ?? '') })) {
+                  await ctx.invoke('abc', ['works', 'remove', [work.id]]);
+                  await loadWorks();
+                }
+              }));
+              history.append(card);
             }
-            if (task.kind === 'separate') card.append(button(say('两轨加入混音', 'Mix both tracks'), () => addToMix(task.outputs.map((output) => output.path))));
-            card.append(button(say('移除记录', 'Remove record'), async () => {
-              if (await ctx.ui.confirm({ title: say('移除这条作品记录？', 'Remove this work record?'), body: say('已生成的音频文件仍会保留。', 'Generated audio files are kept.') })) await run('remove', [task.id]);
-            }));
-            history.append(card);
           }
         };
+        const loadWorks = async (): Promise<void> => {
+          try {
+            const data = await ctx.invoke('abc', ['works', 'list', []]) as { items?: Array<Record<string, unknown>> };
+            if (controller.signal.aborted) return;
+            works = Array.isArray(data?.items) ? data.items : [];
+            draw();
+          } catch { /* keep the current list */ }
+        };
         pane.append(count, audio, history);
-        refreshPane = draw;
+        refreshPane = () => { void loadWorks(); };
         draw();
+        await loadWorks();
         return;
       }
       const progress = el('div', 'music-progress'); progress.setAttribute('role', 'status');
@@ -277,7 +303,7 @@ export const musicPanel: WebUiPanel = {
 
     await show(tabButtons.has(tab) ? tab : 'separate');
     ctx.interval(() => {
-      if (ctx.signal.aborted || tab === 'abc') return;
+      if (ctx.signal.aborted || tab === 'scores' || tab === 'arrange' || tab === 'instruments') return;
       void ctx.invoke<MusicState>('state').then((next) => { state = next; if (!ctx.signal.aborted) refreshPane?.(); }).catch(() => {});
     }, 1000);
   },

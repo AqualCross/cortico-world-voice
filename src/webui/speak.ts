@@ -49,7 +49,7 @@ interface SpeakState {
     engine: 'edge' | 'gpt-sovits' | 'dashscope' | 'openai';
     textLang: string;
     edge: { voice: string; rate: number; pitch: number };
-    gptSovits: { tier: string; refAudio: string; refText: string; speed: number };
+    gptSovits: { tier: string; refAudio: string; refText: string; speed: number; idleMinutes: number };
     dashscope: {
       baseUrl: string; model: string; voice: string; apiKeySecret: string;
       format: string; sampleRate: number; instruction: string; languageHints: string; seed: number;
@@ -68,8 +68,8 @@ interface SpeakState {
   singRuntime?: SingRuntime;
   lastSing?: LastSing | null;
   banks: Array<{ name: string; label: string; colors: string[] }>;
-  convert: { engine: string; model: string; pitch: number; indexRate: number; protect: number };
-  sing: { engine: string; voicebank: string; color: string; bpm: number; keyShift: number; scale: 'major' | 'minor'; seed: number; convert: boolean };
+  convert: { engine: string; model: string; pitch: number; indexRate: number; protect: number; idleMinutes: number };
+  sing: { engine: string; voicebank: string; color: string; bpm: number; keyShift: number; scale: 'major' | 'minor'; seed: number; convert: boolean; idleMinutes: number };
   gpus: Array<{ index: number; name: string; vramMB: number }>;
   secrets: { dashscope: boolean; openai: boolean };
 }
@@ -90,6 +90,7 @@ const TEXT = {
     refImport: '导入',
     refDrop: '把音频拖到这里导入（WAV / MP3 / FLAC…）',
     speed: '语速',
+    idleMinutes: '闲置分钟',
     model: '模型',
     voice: '音色',
     edgeRate: '语速',
@@ -155,6 +156,7 @@ const TEXT = {
     refImport: 'Import',
     refDrop: 'Drop audio here to import (WAV / MP3 / FLAC…)',
     speed: 'Speed',
+    idleMinutes: 'Idle minutes',
     model: 'Model',
     voice: 'Voice',
     edgeRate: 'Rate',
@@ -547,6 +549,7 @@ export const speakPanel: WebUiPanel = {
           })));
         }
         detail.append(field(t.speed, slider(g.speed, { min: 0.5, max: 2, step: 0.05 }, (v) => save('speak.gptSovits.speed', v), (v) => v.toFixed(2))));
+        detail.append(field(t.idleMinutes, slider(g.idleMinutes, { min: 0, max: 120, step: 1 }, (v) => save('speak.gptSovits.idleMinutes', v), (v) => String(v))));
       } else if (state.speak.engine === 'dashscope') {
         const d = state.speak.dashscope;
         detail.append(field(t.dashscopeBase, textInput(d.baseUrl, (v) => save('speak.dashscope.baseUrl', v))));
@@ -596,6 +599,7 @@ export const speakPanel: WebUiPanel = {
       pane.append(field(t.pitch, slider(c.pitch, { min: -24, max: 24, step: 1 }, (v) => save('convert.pitch', v), (v) => String(v))));
       pane.append(field(t.indexRate, slider(c.indexRate, { min: 0, max: 1, step: 0.01 }, (v) => save('convert.indexRate', v), (v) => v.toFixed(2))));
       pane.append(field(t.protect, slider(c.protect, { min: 0, max: 0.5, step: 0.01 }, (v) => save('convert.protect', v), (v) => v.toFixed(2))));
+      pane.append(field(t.idleMinutes, slider(c.idleMinutes, { min: 0, max: 120, step: 1 }, (v) => save('convert.idleMinutes', v), (v) => String(v))));
 
       const audioRow = ctx.ui.rowbar();
       const audioInput = textInput(convertInput, (v) => { convertInput = v; });
@@ -678,6 +682,7 @@ export const speakPanel: WebUiPanel = {
         { value: 'minor', label: { zh: t.scaleMinor, en: t.scaleMinor } },
       ], s.scale, (v) => save('sing.scale', v, true))));
       pane.append(field(t.singSeed, numberInput(s.seed, { min: 0, max: 99999999, step: 1 }, (v) => save('sing.seed', v))));
+      pane.append(field(t.idleMinutes, slider(s.idleMinutes, { min: 0, max: 120, step: 1 }, (v) => save('sing.idleMinutes', v), (v) => String(v))));
       const convertRow = ctx.ui.rowbar();
       const convertSwitch = el('button') as HTMLButtonElement;
       convertSwitch.type = 'button';

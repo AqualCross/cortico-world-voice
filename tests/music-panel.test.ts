@@ -42,12 +42,12 @@ async function mount() {
 }
 
 describe('音乐页', () => {
-  it('二级页为分离、混音、ABC、记录；完成结果只留在记录页', async () => {
+  it('二级页为分离、混音、作曲、编曲、音源、记录；完成结果只留在记录页', async () => {
     const page = await mount();
     try {
       expect(page.root.firstElementChild?.tagName).toBe('STYLE');
       expect(page.root.querySelector('.audio-music > .aud-tabs')).toBeTruthy();
-      expect([...page.root.querySelectorAll('.aud-tabs [role=tab]')].map((node) => node.textContent)).toEqual(['分离', '混音', 'ABC', '记录']);
+      expect([...page.root.querySelectorAll('.aud-tabs [role=tab]')].map((node) => node.textContent)).toEqual(['分离', '混音', '作曲', '编曲', '音源', '记录']);
       expect(page.root.textContent).toContain('已完成，可在「记录」查看。');
       expect(page.root.textContent).not.toContain('D:/vocals.wav');
       await page.click('记录');
@@ -62,7 +62,7 @@ describe('音乐页', () => {
     const page = await mount();
     try {
       await page.click('记录');
-      expect(page.root.textContent).toContain('共 1 项作品');
+      expect(page.root.textContent).toContain('共 1 项记录');
       expect(page.root.textContent).toContain('人声');
       expect(page.root.textContent).toContain('伴奏');
       expect(page.root.textContent).toContain('D:/vocals.wav');
@@ -73,16 +73,17 @@ describe('音乐页', () => {
     } finally { page.dispose(); }
   });
 
-  it('ABC 保留原来的乐谱编辑、作品和乐器页，切换后保留草稿并关闭旧订阅', async () => {
+  it('作曲、编曲、音源是一级页；切换后保留草稿并关闭旧订阅', async () => {
     const page = await mount();
     try {
-      await page.click('ABC');
-      expect(page.root.textContent).toContain('乐谱'); expect(page.root.textContent).toContain('作品'); expect(page.root.textContent).toContain('乐器');
+      await page.click('作曲');
+      expect(page.root.textContent).toContain('选择乐谱'); expect(page.root.textContent).toContain('导出 MIDI');
       const editor = page.root.querySelector('textarea')!;
       editor.value = 'X:1\nT:草稿\nK:C\nCDEF|'; editor.dispatchEvent(new Event('input', { bubbles: true }));
       await page.click('混音'); expect(page.streamsClosed).toBeGreaterThan(0);
-      await page.click('ABC'); expect(page.root.querySelector('textarea')?.value).toContain('T:草稿');
-      await page.click('乐器'); expect(page.root.textContent).toContain('获取GeneralUser GS');
+      await page.click('作曲'); expect(page.root.querySelector('textarea')?.value).toContain('T:草稿');
+      await page.click('音源'); expect(page.root.textContent).toContain('获取GeneralUser GS');
+      await page.click('编曲'); expect(page.root.textContent).toContain('分段'); expect(page.root.textContent).toContain('导出 MIDI');
     } finally { page.dispose(); }
   });
 });

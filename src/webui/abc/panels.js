@@ -1,4 +1,6 @@
 import abcjs from 'abcjs';
+import { GROOVE_NAMES } from '../../music-abc/band.js';
+import { expandMotifs } from '../../music-abc/motifs.js';
 import { blocksCompile } from '../../music-abc/warnings.js';
 import { STYLE } from './style.js';
 import { followScore } from './score-follow.js';
@@ -8,14 +10,22 @@ import { mountTools } from './tool-text-panel.js';
 const words = {
   works: ['作品', 'Works'],
   scoreSelect: ['选择乐谱', 'Select score'], unsaved: ['未保存的乐谱', 'Unsaved score'], instrument: ['演奏乐器', 'Instrument'],
-  new: ['新建', 'New'], save: ['保存乐谱', 'Save score'], preview: ['试听', 'Listen'], render: ['生成作品', 'Render audio'],
+  backing: ['自动伴奏', 'Backing'], backingOff: ['关闭（和弦只标注）', 'Off (labels only)'], backingAbcjs: ['abcjs 低音 + 和弦', 'abcjs bass + chords'], backingBand: ['band 完整伴奏', 'band (comp + bass + drums)'],
+  groove: ['律动', 'Groove'], energy: ['能量', 'Energy'], drafts: ['草稿', 'Drafts'],
+  arrange: ['编曲', 'Arrange'],
+  arrangeHelp: ['自动伴奏只影响渲染，不改写 ABC。改谱请去「作曲」页。', 'Backing only affects rendering; edit the ABC in Compose.'],
+  sections: ['分段（JSON，可选）', 'Sections (JSON, optional)'],
+  sectionsHelp: ['例：[{"fromBar":5,"toBar":8,"groove":"funk","energy":5,"stopBars":[8]}]。小节按演奏顺序，弱起算第 1 小节。', 'Example: [{"fromBar":5,"toBar":8,"groove":"funk","energy":5,"stopBars":[8]}]. Bars are performance order; a pickup counts as bar 1.'],
+  saveArrangement: ['保存编曲到乐谱', 'Save arrangement to score'], arrangementSaved: ['编曲设置已保存。', 'Arrangement saved.'],
+  noScores: ['还没有乐谱。先去「乐谱」写一首。', 'No scores yet. Write one in Scores.'],
+  new: ['新建', 'New'], save: ['保存乐谱', 'Save score'], preview: ['试听', 'Listen'], render: ['生成作品', 'Render audio'], exportMidi: ['导出 MIDI', 'Export MIDI'],
   source: ['ABC谱', 'ABC score'],
   check: ['检查乐谱', 'Validate'], refresh: ['刷新', 'Refresh'], remove: ['删除', 'Delete'], current: ['当前默认', 'Default'], select: ['设为默认', 'Set default'],
   generating: ['正在生成采样音频…', 'Rendering sampled audio…'], saved: ['乐谱已保存。', 'Score saved.'], rendered: ['作品已生成，可在作品面板查看。', 'Audio saved to Works.'],
-  sourceHelp: ['V: 分声部 · [CEG] 写和弦 · !p! / !f! 写力度 · 引号和弦仅作标注', 'V: voices · [CEG] chords · !p! / !f! dynamics · quoted chord names are labels'],
+  sourceHelp: ['V: 分声部 · [CEG] 写和弦 · !p! / !f! 写力度 · % motif 名字: ... 定义动机，@名字+1 移调 · 引号和弦可驱动自动伴奏（在「编曲」页设置）', 'V: voices · [CEG] chords · !p! / !f! dynamics · % motif name: ... defines a motif, @name+1 transposes it · quoted chords drive the backing (set in Arrange)'],
   unengraved: ['部分时值短于六十四分音符，谱面无法精确记写；演奏与保存不受影响。', 'Some durations are shorter than a 64th note and cannot be notated exactly; playback and saving are unaffected.'],
   dirty: ['有未保存的修改', 'Unsaved changes'], ready: ['乐谱预览', 'Score preview'], snapshot: ['演奏时的乐谱快照', 'Score at the time of rendering'],
-  viewScore: ['查看乐谱', 'View score'], copy: ['复制路径', 'Copy path'], openFolder: ['打开文件夹', 'Open folder'], empty: ['还没有作品。在乐谱面板生成第一段演奏。', 'No works yet. Render your first performance in Scores.'],
+  viewScore: ['查看乐谱', 'View score'], copy: ['复制路径', 'Copy path'], openFolder: ['打开文件夹', 'Open folder'], empty: ['还没有作品。在作曲页生成第一段演奏。', 'No works yet. Render your first performance in Compose.'],
   deleteTitle: ['删除这条记录？', 'Delete this record?'], deleteBody: ['删除后无法撤销。已生成作品中的乐谱快照会独立保留。', 'This cannot be undone. Other works retain their own score snapshots.'],
   switchTitle: ['切换乐谱？', 'Switch score?'], switchBody: ['当前修改尚未保存。继续会替换编辑器中的内容。', 'Your changes are not saved. Continuing replaces the editor contents.'],
   removeScore: ['删除乐谱', 'Delete score'],
@@ -25,7 +35,7 @@ const words = {
   noFont: ['还没有音源', 'No SoundFonts yet'], noFontHelp: ['获取 GeneralUser GS，或导入本机 SF2 / SF3 文件。', 'Get GeneralUser GS or import a local SF2 / SF3 file.'],
   fontRights: ['GeneralUser GS 允许商业音乐创作。作者无法完全确认所有采样的原始来源，本扩展未逐一独立核验。', 'GeneralUser GS permits commercial music creation. Its author cannot establish every sample’s original provenance; this extension has not independently audited every sample.'],
   fontSource: ['来源与许可', 'Source and license'], fontSearch: ['搜索乐器或音源文件', 'Search instruments or SoundFonts'],
-  fontMissing: ['音源未安装，请在乐器页获取或导入。', 'Install a SoundFont in Instruments.'],
+  fontMissing: ['音源未安装，请在音源页获取或导入。', 'Install a SoundFont in Soundfonts.'],
   noMatches: ['没有匹配的乐器', 'No matching instruments'], presets: ['个预设', 'presets'],
   downloadFont: ['正在获取 GeneralUser GS', 'Downloading GeneralUser GS'], importDone: ['音源已导入。', 'SoundFont imported.'],
   missingPreset: ['预设未安装', 'Preset unavailable'],
@@ -43,6 +53,8 @@ function button(ctx, label, action, className = '') {
 }
 function field(label, control, wide = false) { const node = el('label', `am-field${wide ? ' wide' : ''}`); node.append(el('span', '', label), control); return node; }
 function option(value, label) { const node = el('option', '', label); node.value = value; return node; }
+const midiName = value => `${String(value || 'score').replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 80) || 'score'}.mid`;
+function downloadBlob(blob, name) { const url = URL.createObjectURL(blob), link = el('a'); link.href = url; link.download = name; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
 function frame(ctx) {
   const root = el('section', 'abc-music');
   const style = el('style'); style.textContent = STYLE; root.append(style);
@@ -64,9 +76,6 @@ function player(ctx, root) {
     },
   };
 }
-function downloadBlob(blob, name) {
-  const url = URL.createObjectURL(blob), link = el('a'); link.href = url; link.download = name; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
 function subscribe(ctx, action) {
   ctx.own(ctx.stream({ message(raw) { try { const data = JSON.parse(raw); if (data.t === 'changed') void action().catch(() => {}); } catch {} } }));
 }
@@ -74,10 +83,10 @@ const blankScore = instrument => ({ abc: 'X:1\nT:新乐谱\nM:4/4\nL:1/8\nQ:1/4=
 
 function scoresPanel(ctx) {
   const t = tr(ctx), root = frame(ctx);
-  const toolbar = el('div', 'am-toolbar'), scoreSelect = el('select'), instrument = el('select');
+  const toolbar = el('div', 'am-toolbar'), scoreSelect = el('select'), instrument = el('select'), draftsLabel = el('span', 'muted');
   scoreSelect.setAttribute('aria-label', t('scoreSelect')); instrument.setAttribute('aria-label', t('instrument'));
-  toolbar.append(field(t('scoreSelect'), scoreSelect, true), field(t('instrument'), instrument));
-  const newButton = button(ctx, t('new'), newScore), saveButton = button(ctx, t('save'), save), previewButton = button(ctx, t('preview'), preview), renderButton = button(ctx, t('render'), render);
+  toolbar.append(field(t('scoreSelect'), scoreSelect, true), field(t('instrument'), instrument), draftsLabel);
+  const newButton = button(ctx, t('new'), newScore), saveButton = button(ctx, t('save'), save), previewButton = button(ctx, t('preview'), preview), renderButton = button(ctx, t('render'), render), midiButton = button(ctx, t('exportMidi'), exportMidi);
   const source = el('section', 'am-source'), sourceLabel = el('div', 'am-row am-sourcelabel'), editor = el('textarea'), sourceActions = el('div', 'am-row am-sourceactions'), dirtyLabel = el('span', 'muted');
   source.setAttribute('aria-label', t('source'));
   editor.spellcheck = false; editor.setAttribute('aria-label', t('source'));
@@ -89,13 +98,14 @@ function scoresPanel(ctx) {
   }, 'danger');
   sourceLabel.append(el('span', 'grow', t('source')), dirtyLabel);
   const status = el('div', 'am-status'); status.setAttribute('role', 'status');
-  sourceActions.append(newButton, saveButton, previewButton, renderButton, button(ctx, t('check'), check), deleteButton);
+  sourceActions.append(newButton, saveButton, previewButton, renderButton, midiButton, button(ctx, t('check'), check), deleteButton);
   source.append(sourceLabel, toolbar, editor, el('p', 'am-help', t('sourceHelp')), sourceActions, status);
   const playback = player(ctx, source);
   root.append(source);
   const documentBox = el('div', 'am-document'), paper = el('div', 'am-paper'), paperbar = el('div', 'am-paperbar'), paperMeta = el('span');
+  const factsBox = el('pre', 'am-facts');
   paper.setAttribute('aria-label', ctx.language === 'en' ? 'Sheet music' : '五线谱');
-  paperbar.append(paperMeta); documentBox.append(paper, paperbar); root.append(documentBox);
+  paperbar.append(paperMeta); documentBox.append(paper, paperbar, factsBox); root.append(documentBox);
   let state = { id: '', revision: '', abc: '', instrument: '', savedAbc: '', savedInstrument: '' };
   let items = [], busy = false, timer = 0, follower = null, animation = 0, hasLoaded = false, localSequence = 0;
   let available = new Set(), fonts = [], aliases = {}, defaultInstrument = '';
@@ -126,9 +136,12 @@ function scoresPanel(ctx) {
   const refreshHeader = () => { void ctx.refresh().catch(() => {}); };
   function draw() {
     clearTimeout(timer); timer = 0; playback.stop(); follower?.update(false); follower = null;
+    factsBox.textContent = '';
     try {
+      const motif = expandMotifs(editor.value);
+      if (motif.errors.length) { paper.replaceChildren(); paperMeta.textContent = ''; say(motif.errors.join('\n'), true); stash(); return; }
       const width = Math.max(280, paper.clientWidth - 48);
-      const rendered = abcjs.renderAbc(paper, editor.value, { responsive: 'resize', add_classes: true, paddingtop: 15, paddingbottom: 15, staffwidth: width, wrap: { minSpacing: 1.7, maxSpacing: 2.7, preferredMeasuresPerLine: width > 650 ? 4 : 2 } });
+      const rendered = abcjs.renderAbc(paper, motif.abc, { responsive: 'resize', add_classes: true, paddingtop: 15, paddingbottom: 15, staffwidth: width, wrap: { minSpacing: 1.7, maxSpacing: 2.7, preferredMeasuresPerLine: width > 650 ? 4 : 2 } });
       const tune = rendered[0] || null;
       const warnings = tune?.warnings ?? [], blocking = warnings.filter(blocksCompile);
       if (blocking.length) say(blocking.map(one => String(one).replace(/<[^>]*>/g, '')).join('\n'), true);
@@ -151,23 +164,23 @@ function scoresPanel(ctx) {
     next = { ...next, instrument: aliases[next.instrument] || next.instrument || defaultInstrument };
     if (next.savedInstrument) next.savedInstrument = aliases[next.savedInstrument] || next.savedInstrument;
     state = { id: next.id || '', revision: next.revision || '', savedAbc: next.id ? next.abc : '', savedInstrument: next.id ? next.instrument : '', ...next };
-    editor.value = state.abc; fillInstruments(state.instrument); scoreSelect.value = state.id; draw();
+    editor.value = state.abc; fillInstruments(state.instrument); scoreSelect.value = state.id; controls(); draw();
   }
   async function canReplace() { return !dirty() || await ctx.ui.confirm({ title: t('switchTitle'), body: t('switchBody') }); }
   async function newScore() {
     if (!await canReplace()) return;
     setEditor(blankScore(instrument.value)); editor.focus();
   }
-  const input = () => ({ abc: editor.value, instrument: instrument.value });
+  const input = () => ({ id: state.id, abc: editor.value, instrument: instrument.value });
   async function run(action, message = '') {
     if (busy) return;
     if (timer) draw();
     busy = true;
-    for (const node of [saveButton, previewButton, renderButton, scoreSelect, instrument, newButton, deleteButton]) node.disabled = true;
+    for (const node of [saveButton, previewButton, renderButton, midiButton, scoreSelect, instrument, newButton, deleteButton]) node.disabled = true;
     if (message) say(message);
     try { return await action(); }
     catch (error) { say(msg(error), true); throw error; }
-    finally { busy = false; for (const node of [saveButton, scoreSelect, instrument, newButton]) node.disabled = false; controls(); deleteButton.disabled = !state.id; refreshHeader(); }
+    finally { busy = false; for (const node of [saveButton, scoreSelect, instrument, newButton, midiButton]) node.disabled = false; controls(); deleteButton.disabled = !state.id; refreshHeader(); }
   }
   async function save() {
     return run(async () => {
@@ -179,8 +192,9 @@ function scoresPanel(ctx) {
       await reload(); scoreSelect.value = saved.id; stash(); say(t('saved'));
     });
   }
-  async function check() { return run(async () => { const result = await ctx.invoke('check', [input()]); say(`${result.notes} 音 · ${result.voices} 声部 · ${duration(result.seconds)} · ABC ✓`); }); }
+  async function check() { return run(async () => { const result = await ctx.invoke('check', [input()]); say(`${result.notes} 音 · ${result.voices} 声部 · ${duration(result.seconds)} · ABC ✓`); factsBox.textContent = (result.facts ?? []).join('\n'); }); }
   async function preview() { return run(async () => { await playback.play(() => ctx.invokeBinary('preview', [input()]), scoreTitle(editor.value)); say(''); }, t('generating')); }
+  async function exportMidi() { return run(async () => { const blob = await ctx.invokeBinary('midi', [input()]); downloadBlob(blob, midiName(scoreTitle(editor.value))); }); }
   async function render() {
     return run(async () => {
       if (dirty() || !state.id) {
@@ -191,12 +205,14 @@ function scoresPanel(ctx) {
         stash();
       }
       const item = await ctx.invoke('render', [{ score: state.id }]);
+      factsBox.textContent = (item.facts ?? []).join('\n');
       say(`${t('rendered')} ${duration(item.seconds)}`); await reload();
     }, t('generating'));
   }
   async function reload() {
     const data = await ctx.invoke('list'); if (ctx.signal.aborted) return;
     items = data.items;
+    draftsLabel.textContent = data.drafts?.length ? `${t('drafts')}: ${data.drafts.length}` : '';
     fonts = data.fonts; available = new Set(data.instruments.map(one => one.id)); aliases = data.aliases; defaultInstrument = data.state.instrument;
     const selectedInstrument = instrument.value;
     scoreSelect.replaceChildren(option('', t('unsaved')), ...items.map(one => option(one.id, one.title)));
@@ -229,57 +245,116 @@ function scoresPanel(ctx) {
   subscribe(ctx, reload); void reload().catch(error => say(msg(error), true));
 }
 
-function worksPanel(ctx) {
+function arrangementPanel(ctx) {
   const t = tr(ctx), root = frame(ctx);
-  const toolbar = el('div', 'am-row'), count = el('span', 'muted grow');
-  toolbar.style.marginBottom = '16px'; toolbar.append(count, button(ctx, t('openFolder'), async () => {
-    const result = await ctx.invoke('openFolder', []);
-    if (!result?.ok) throw new Error(result?.detail || t('openFolderBad'));
-  }), button(ctx, t('refresh'), reload)); root.append(toolbar);
-  const playback = player(ctx, root), list = el('div', 'am-list'); root.append(list);
-  const open = new Set(), followers = new Map(); let sequence = 0, activeId = '', animation = 0;
-  const sync = () => { for (const [id, follower] of followers) follower.update(id === activeId); };
-  const tick = () => { sync(); animation = playback.audio.paused ? 0 : requestAnimationFrame(tick); };
-  listen(ctx, playback.audio, 'play', () => { cancelAnimationFrame(animation); tick(); });
-  for (const event of ['timeupdate', 'seeked', 'pause', 'ended', 'emptied']) listen(ctx, playback.audio, event, sync);
-  ctx.own({ dispose() { cancelAnimationFrame(animation); } });
-  async function reload() {
-    const ticket = ++sequence, data = await ctx.invoke('list'); if (ctx.signal.aborted || ticket !== sequence) return;
-    count.textContent = `${data.items.length} ${t('works')} · ${(data.items.reduce((sum, one) => sum + one.bytes, 0) / 1048576).toFixed(1)} MB`;
-    followers.clear(); list.replaceChildren(); if (!data.items.length) list.append(el('div', 'am-empty', t('empty')));
-    for (const item of data.items) {
-      const card = el('article', 'am-card'), row = el('div', 'am-row'), detail = el('details');
-      card.append(el('h3', '', item.title), el('p', 'muted', `${duration(item.seconds)} · ${item.voices} ${ctx.language === 'en' ? 'voices' : '声部'} · ${item.instrumentLabel || item.instrument} · ${item.soundfont || ''} · ${new Date(item.createdAt).toLocaleString()}`));
-      const fetchFile = format => ctx.invokeBinary('file', [{ id: item.id, format }]);
-      row.append(button(ctx, t('preview'), () => {
-        activeId = ''; sync();
-        return playback.play(() => { activeId = item.id; return fetchFile('wav'); }, item.title);
-      }), button(ctx, 'WAV ↓', async () => downloadBlob(await fetchFile('wav'), `${item.id}.wav`)), button(ctx, 'MIDI ↓', async () => downloadBlob(await fetchFile('mid'), `${item.id}.mid`)), button(ctx, 'ABC ↓', async () => downloadBlob(await fetchFile('abc'), `${item.id}.abc`)), button(ctx, t('copy'), async () => { await navigator.clipboard.writeText(item.path); ctx.ui.toast(t('copied'), 'ok'); }), button(ctx, t('remove'), async () => {
-        if (!await ctx.ui.confirm({ title: t('deleteTitle'), body: item.title, danger: true })) return;
-        activeId = ''; sync(); playback.stop(); await ctx.invoke('remove', [item.id]); await reload(); void ctx.refresh();
-      }, 'danger'));
-      if (ctx.scope?.audioMusic) row.append(button(ctx, ctx.language === 'en' ? 'Add to mix' : '加入混音', () => {
-        ctx.root.dispatchEvent(new CustomEvent('audio:add-to-mix', { bubbles: true, detail: [item.path] }));
-      }));
-      card.append(row);
-      detail.append(el('summary', '', `${t('viewScore')} · ${t('snapshot')}`));
-      let drawn = false, drawing = false;
-      async function show() {
-        if (!detail.open || drawn || drawing) return;
-        drawing = true;
-        try {
-          const snapshot = await ctx.invoke('get', [item.id]); if (ctx.signal.aborted || ticket !== sequence) return;
-          const sheet = el('div', 'am-paper'); detail.append(el('p', 'muted', t('snapshot')), sheet);
-          const [tune] = abcjs.renderAbc(sheet, snapshot.abc, { responsive: 'resize', staffwidth: Math.max(280, sheet.clientWidth - 48), wrap: { minSpacing: 1.7, maxSpacing: 2.7, preferredMeasuresPerLine: 2 } });
-          if (tune) followers.set(item.id, followScore(sheet, tune, playback.audio));
-          sync(); drawn = true;
-        } finally { drawing = false; }
-      }
-      listen(ctx, detail, 'toggle', () => { if (detail.open) open.add(item.id); else open.delete(item.id); void show().catch(error => ctx.ui.toast(msg(error), 'bad')); });
-      card.append(detail); list.append(card); if (open.has(item.id)) { detail.open = true; void show(); }
-    }
+  const toolbar = el('div', 'am-toolbar'), scoreSelect = el('select'), backing = el('select'), groove = el('select'), energy = el('select');
+  scoreSelect.setAttribute('aria-label', t('scoreSelect')); backing.setAttribute('aria-label', t('backing'));
+  groove.setAttribute('aria-label', t('groove')); energy.setAttribute('aria-label', t('energy'));
+  backing.append(option('off', t('backingOff')), option('abcjs', t('backingAbcjs')), option('band', t('backingBand')));
+  backing.value = 'off';
+  for (const name of GROOVE_NAMES) groove.append(option(name, name));
+  groove.value = 'pop';
+  for (let value = 1; value <= 5; value++) energy.append(option(String(value), String(value)));
+  energy.value = '3';
+  toolbar.append(field(t('scoreSelect'), scoreSelect, true), field(t('backing'), backing), field(t('groove'), groove), field(t('energy'), energy));
+  const sections = el('textarea', 'am-sections');
+  sections.placeholder = '[{"fromBar":5,"toBar":8,"groove":"funk","energy":5,"stopBars":[8]}]';
+  sections.setAttribute('aria-label', t('sections'));
+  const actions = el('div', 'am-row am-sourceactions');
+  const previewButton = button(ctx, t('preview'), preview), renderButton = button(ctx, t('render'), render);
+  const midiButton = button(ctx, t('exportMidi'), exportMidi);
+  const saveButton = button(ctx, t('saveArrangement'), saveArrangement), refreshButton = button(ctx, t('refresh'), reload);
+  actions.append(previewButton, renderButton, midiButton, saveButton, refreshButton);
+  const status = el('div', 'am-status'); status.setAttribute('role', 'status');
+  const facts = el('pre', 'am-facts');
+  root.append(toolbar, el('p', 'am-help', t('arrangeHelp')), field(t('sections'), sections, true), el('p', 'am-help', t('sectionsHelp')), actions, status, facts);
+  const playback = player(ctx, root);
+  let items = [], loaded = null, busy = false;
+  const say = (text, bad = false) => { status.textContent = text; status.classList.toggle('bad', bad); };
+  const controls = () => {
+    const band = backing.value === 'band';
+    groove.disabled = energy.disabled = sections.disabled = !band || busy;
+    previewButton.disabled = renderButton.disabled = !loaded || busy || !backing.value;
+    midiButton.disabled = !loaded || busy;
+    saveButton.disabled = !loaded || busy;
+    scoreSelect.disabled = busy;
+  };
+  function parseSections() {
+    const text = sections.value.trim();
+    if (!text) return [];
+    const parsed = JSON.parse(text);
+    if (!Array.isArray(parsed)) throw new Error('sections 必须是数组。');
+    return parsed;
   }
-  subscribe(ctx, reload); void reload().catch(error => ctx.ui.toast(msg(error), 'bad'));
+  const arrangement = () => ({ backing: backing.value, groove: groove.value, energy: Number(energy.value), sections: parseSections() });
+  async function load() {
+    const id = scoreSelect.value;
+    if (!id) { loaded = null; facts.textContent = ''; controls(); return; }
+    const score = await ctx.invoke('get', [id]);
+    loaded = score;
+    backing.value = score.backing || 'off';
+    groove.value = score.groove || 'pop';
+    energy.value = String(score.energy ?? 3);
+    sections.value = score.sections?.length ? JSON.stringify(score.sections, null, 2) : '';
+    facts.textContent = '';
+    controls();
+  }
+  async function reload() {
+    try {
+      const data = await ctx.invoke('list');
+      items = data.items || [];
+      const keep = scoreSelect.value;
+      scoreSelect.replaceChildren(option('', t('scoreSelect')), ...items.map(one => option(one.id, one.title)));
+      if (keep && items.some(one => one.id === keep)) scoreSelect.value = keep;
+      else if (items.length) scoreSelect.value = items[0].id;
+      await load();
+      if (!items.length) say(t('noScores'));
+    } catch (error) { say(msg(error), true); }
+  }
+  async function run(action, message = '') {
+    if (busy) return;
+    busy = true; controls(); if (message) say(message);
+    try { return await action(); }
+    catch (error) { say(msg(error), true); throw error; }
+    finally { busy = false; controls(); }
+  }
+  async function preview() {
+    return run(async () => {
+      if (!loaded) return;
+      const input = { abc: loaded.abc, instrument: loaded.instrument, ...arrangement() };
+      await playback.play(() => ctx.invokeBinary('preview', [input]), scoreTitle(loaded.abc));
+      say('');
+    }, t('generating'));
+  }
+  async function render() {
+    return run(async () => {
+      if (!loaded) return;
+      const item = await ctx.invoke('render', [{ score: loaded.id, ...arrangement() }]);
+      facts.textContent = (item.facts ?? []).join('\n');
+      say(`${t('rendered')} ${duration(item.seconds)}`);
+    }, t('generating'));
+  }
+  async function exportMidi() {
+    return run(async () => {
+      if (!loaded) return;
+      const blob = await ctx.invokeBinary('midi', [{ score: loaded.id, ...arrangement() }]);
+      downloadBlob(blob, midiName(loaded.title));
+    });
+  }
+  async function saveArrangement() {
+    return run(async () => {
+      if (!loaded) return;
+      loaded = await ctx.invoke('save', [{ id: loaded.id, abc: loaded.abc, instrument: loaded.instrument, title: loaded.title, expectedRevision: loaded.revision, ...arrangement() }]);
+      say(t('arrangementSaved'));
+      await reload();
+    }, t('arrangementSaved'));
+  }
+  listen(ctx, scoreSelect, 'change', () => { void load().catch(error => say(msg(error), true)); });
+  listen(ctx, backing, 'change', controls);
+  listen(ctx, groove, 'change', controls);
+  listen(ctx, energy, 'change', controls);
+  subscribe(ctx, reload);
+  void reload().catch(error => say(msg(error), true));
 }
 
 function instrumentsPanel(ctx) {
@@ -353,4 +428,4 @@ function instrumentsPanel(ctx) {
   subscribe(ctx, reload); void reload().catch(error => ctx.ui.toast(msg(error), 'bad'));
 }
 
-export default { panels: { scores: { mount: scoresPanel }, works: { mount: worksPanel }, instruments: { mount: instrumentsPanel }, tools: { mount: mountTools } } };
+export default { panels: { scores: { mount: scoresPanel }, arrange: { mount: arrangementPanel }, instruments: { mount: instrumentsPanel }, tools: { mount: mountTools } } };

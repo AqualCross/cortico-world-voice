@@ -9,6 +9,7 @@ import def from '../../src/music-abc/index.js';
 import { compileAbc } from '../../src/music-abc/abc.js';
 import { AudioRenderer } from '../../src/music-abc/audio.js';
 import { MusicStore } from '../../src/music-abc/store.js';
+import { parseChord } from '../../src/music-abc/theory.js';
 import { testBank } from './fixture.mjs';
 
 const phrase = body => `X:1\nT:Test\nM:4/4\nL:1/4\nQ:1/4=120\nK:C\n${body}`;
@@ -101,6 +102,161 @@ test('durations too short to engrave compile, play and are reported once per tok
 test('quoted chord labels do not silently create an accompaniment', () => {
   assert.equal(compileAbc(phrase('"Am"C4 |]')).summary.voices, 1);
 });
+test('named blocks allow a partial score revision', async t => {
+  const { world } = worldFor(t), tool = world.tools()[0];
+  const abc = 'X:1\nT:Blocks\nM:4/4\nL:1/4\nQ:1/4=100\nK:C\n% block: A\n|: C D E F :|\n% end: A\n% block: B\n|: G A B c :|\n% end: B\n';
+  const saved = await world.invoke('scores', 'save', [{ abc }]);
+  const revised = await tool.handler({ action: 'revise', id: saved.id, expectedRevision: saved.revision, block: 'B', abc: '|: A B c d :|' });
+  assert.ok(!revised.failed, revised.text);
+  const after = await world.invoke('scores', 'get', [saved.id]);
+  assert.match(after.abc, /A B c d/);
+  assert.match(after.abc, /C D E F/);
+  assert.notEqual(after.revision, saved.revision);
+  const missing = await tool.handler({ action: 'revise', id: saved.id, block: 'C', abc: '|: C D E F :|' });
+  assert.equal(missing.failed, true);
+  assert.match(missing.text, /找不到块/);
+});
+
+test('motif macros expand and transpose by scale steps', () => {
+  const abc = 'X:1\nT:Motif\nM:4/4\nL:1/4\nQ:1/4=100\nK:C\n% motif drip: C D E F\n@drip | @drip+1 | @drip-1 |]';
+  const compiled = compileAbc(abc);
+  assert.equal(compiled.summary.motifs, 1);
+  assert.match(compiled.expandedAbc, /C D E F/);
+  const notes = notesOf(compiled);
+  assert.deepEqual(notes.slice(0, 4).map(note => note.midi), [60, 62, 64, 65]);
+  assert.deepEqual(notes.slice(4, 8).map(note => note.midi), [62, 64, 65, 67]);
+  assert.deepEqual(notes.slice(8, 12).map(note => note.midi), [59, 60, 62, 64]);
+  assert.throws(() => compileAbc('X:1\nM:4/4\nL:1/4\nK:C\n@nope |]'), error => {
+    assert.ok(error.problems.some(problem => /no "% motif/.test(problem)));
+    return true;
+  });
+});
+
+test('chord facts leave diatonic tensions alone', () => {
+  const compiled = compileAbc('X:1\nM:4/4\nL:1/4\nQ:1/4=100\nK:C\n"A" D4 | "C" ^C4 |]');
+  assert.equal(compiled.facts.key, 'C');
+  assert.equal(compiled.facts.outside.length, 1);
+  assert.equal(compiled.facts.outside[0].chord, 'C');
+  const e = compileAbc('X:1\nM:4/4\nL:1/4\nQ:1/4=100\nK:E\n"A" =D4 | "E" =F4 |]');
+  assert.equal(e.facts.outside.length, 1);
+  assert.equal(e.facts.outside[0].chord, 'E');
+});
+
+test('facts report voices, ranges, repeated bars and notes outside a quoted chord', () => {
+  const abc = phrase('V:1 name="Melody"\n"C" C E G ^C | "F" F A c A |]\nV:2 name="Bass"\n%%MIDI program 32\nC,2 G,2 | F,2 c,2 |]');
+  const compiled = compileAbc(abc);
+  assert.equal(compiled.facts.bars, 2);
+  assert.equal(compiled.facts.voices.length, 2);
+  assert.equal(compiled.facts.voices[0].name, 'Melody');
+  assert.equal(compiled.facts.voices[1].outOfRange, 1);
+  assert.equal(compiled.summary.outOfRange, 1);
+  assert.equal(compiled.facts.outside.length, 1);
+  assert.equal(compiled.facts.outside[0].chord, 'C');
+  assert.equal(compiled.facts.outside[0].pitch, 61);
+});
+test('abcjs backing is opt-in and keeps written voices separate', () => {
+  const abc = phrase('"C" C E G B | "F" F A c A |]');
+  const off = compileAbc(abc);
+  const on = compileAbc(abc, { backing: 'abcjs' });
+  assert.equal(off.summary.backing, 'off');
+  assert.equal(off.summary.voices, 1);
+  assert.equal(off.summary.backingNotes, 0);
+  assert.equal(on.summary.backing, 'abcjs');
+  assert.equal(on.summary.voices, 1);
+  assert.ok(on.summary.backingNotes > 0);
+  assert.equal(on.facts.voices.length, 2);
+  assert.equal(on.facts.voices[1].backing, true);
+  assert.equal(on.facts.voices[1].name, '伴奏（abcjs）');
+  assert.equal(on.facts.main.name, '声部 1');
+});
+test('band backing arranges comp, bass and drums from quoted chords', () => {
+  const abc = phrase('"C" E G c B | "Am" A c e d | "F" F A c B | "G7" G B d f |]');
+  const low = compileAbc(abc, { backing: 'band', groove: 'pop', energy: 1 });
+  const band = compileAbc(abc, { backing: 'band', groove: 'pop', energy: 3 });
+  assert.equal(band.summary.backing, 'band');
+  assert.equal(band.summary.groove, 'pop');
+  assert.equal(band.summary.energy, 3);
+  assert.equal(band.summary.voices, 1);
+  assert.ok(band.summary.backingNotes > low.summary.backingNotes);
+  assert.equal(band.facts.main.name, '声部 1');
+  assert.ok(band.facts.voices.some(voice => voice.name === '和弦伴奏（band）'));
+  assert.ok(band.facts.voices.some(voice => voice.name === '贝斯（band）'));
+  assert.ok(band.facts.voices.some(voice => voice.name === '鼓（band）'));
+});
+test('band backing validates chords, groove and meter', () => {
+  assert.throws(() => compileAbc(phrase('C D E F |]'), { backing: 'band' }), error => {
+    assert.ok(error.problems.some(problem => /quoted chord/.test(problem)));
+    return true;
+  });
+  assert.throws(() => compileAbc('X:1\nM:3/4\nL:1/4\nQ:1/4=100\nK:C\n"C" C D E |]', { backing: 'band', groove: 'pop' }), error => {
+    assert.ok(error.problems.some(problem => /groove "pop"/.test(problem)));
+    return true;
+  });
+  assert.throws(() => compileAbc(phrase('"C" C D E F |]'), { backing: 'band', sections: [{ fromBar: 3, toBar: 1 }] }), error => {
+    assert.ok(error.problems.some(problem => /toBar/.test(problem)));
+    return true;
+  });
+});
+test('band backing accepts per-section groove and energy overrides', () => {
+  const abc = phrase(Array.from({ length: 8 }, (_, index) => index % 4 === 0 ? '"C" E G c B' : index % 4 === 1 ? '"Am" A c e d' : index % 4 === 2 ? '"F" F A c B' : '"G7" G B d f').join(' | ') + ' |]');
+  const band = compileAbc(abc, {
+    backing: 'band', groove: 'pop', energy: 3,
+    sections: [{ fromBar: 1, toBar: 4, groove: 'bossa', energy: 2, stopBars: [2] }, { fromBar: 5, toBar: 8, groove: 'funk', energy: 5 }],
+  });
+  assert.equal(band.summary.sections.length, 2);
+  assert.deepEqual(band.summary.sections[0].stopBars, [2]);
+  assert.equal(band.summary.sections[1].groove, 'funk');
+  assert.equal(band.summary.sections[1].energy, 5);
+  assert.ok(band.summary.backingNotes > 0);
+  assert.ok(band.facts.voices.some(voice => voice.name === '鼓（band）'));
+});
+test('backing is a persisted configuration value', async t => {
+  const { world, patches } = worldFor(t);
+  assert.equal(world.status().backing, 'off');
+  world.set({ backing: 'band', groove: 'bossa', energy: 4 });
+  assert.equal(world.status().backing, 'band');
+  assert.equal(world.status().groove, 'bossa');
+  assert.equal(world.status().energy, 4);
+  assert.deepEqual(patches.at(-1), { backing: 'band', groove: 'bossa', energy: 4 });
+  assert.throws(() => world.set({ backing: 'other' }), /backing/);
+  assert.throws(() => world.set({ groove: 'other' }), /groove/);
+  assert.throws(() => world.set({ energy: 9 }), /energy/);
+});
+test('the arrangement panel is an alias of the scores panel', async t => {
+  const { world } = worldFor(t);
+  const list = await world.invoke('arrange', 'list');
+  assert.deepEqual(list.items, []);
+  await world.invoke('scores', 'save', [{ abc: phrase('"C" C E G |]') }]);
+  const arranged = await world.invoke('arrange', 'list');
+  assert.equal(arranged.items.length, 1);
+});
+test('a sheet with several problems reports all of them', () => {
+  assert.throws(() => compileAbc('X:1\nM:4/4\nL:1/4\nK:C\nH9 |]\n'), error => {
+    assert.ok(Array.isArray(error.problems));
+    assert.ok(error.problems.length >= 2);
+    assert.ok(error.problems.some(problem => /H9/.test(problem)));
+    assert.ok(error.problems.some(problem => /没有可演奏/.test(problem)));
+    return true;
+  });
+  assert.throws(() => compileAbc('X:1\nC D E F |]'), error => {
+    assert.deepEqual(error.problems.map(problem => problem.match(/缺少 ([XMLK]):/)[1]), ['M', 'L', 'K']);
+    return true;
+  });
+});
+test('quoted chord symbols name the expected pitch classes', () => {
+  const pcs = symbol => [...parseChord(symbol).pcs].sort((a, b) => a - b);
+  assert.deepEqual(pcs('C'), [0, 4, 7]);
+  assert.deepEqual(pcs('Am7'), [0, 4, 7, 9]);
+  assert.deepEqual(pcs('Fmaj7'), [0, 4, 5, 9]);
+  assert.deepEqual(pcs('G7'), [2, 5, 7, 11]);
+  assert.deepEqual(pcs('Bb7#11'), [2, 4, 5, 8, 10]);
+  assert.deepEqual(pcs('F#m7b5'), [0, 4, 6, 9]);
+  assert.deepEqual(pcs('F♯m7b5'), [0, 4, 6, 9]);
+  assert.deepEqual(pcs('B♭maj7'), [2, 5, 9, 10]);
+  assert.deepEqual(pcs('Csus4'), [0, 5, 7]);
+  assert.deepEqual(pcs('C6/9'), [0, 2, 4, 7, 9]);
+  assert.deepEqual(pcs('G/B'), [2, 7, 11]);
+});
 test('saved scores require optimistic revision checks and survive restart', t => {
   const dir = scratch(t), store = new MusicStore(dir), first = store.saveScore(compileAbc(phrase('C4 |]')));
   assert.throws(() => store.saveScore(compileAbc(phrase('D4 |]')), { id: first.id }), /重新读取/);
@@ -109,15 +265,16 @@ test('saved scores require optimistic revision checks and survive restart', t =>
   assert.equal(new MusicStore(dir).score(second.id).abc, second.abc);
   assert.throws(() => store.saveScore(compileAbc(phrase('E4 |]')), { id: first.id, expectedRevision: first.revision }), /重新读取/);
 });
-test('work retains original ABC after editing and deleting its score', t => {
+test('work stores a WAV record and keeps score provenance', t => {
   const dir = scratch(t), store = new MusicStore(dir), compiled = compileAbc(phrase('C4 |]'));
   const score = store.saveScore(compiled), work = store.addWork(compiled, { wav: Buffer.from('test'), seconds: 2 }, { score });
   store.saveScore(compileAbc(phrase('D4 |]')), { id: score.id, expectedRevision: score.revision });
   store.remove('scores', score.id);
-  assert.equal(store.work(work.id).abc, compiled.abc);
+  assert.equal(store.work(work.id).abc, undefined);
   assert.equal(store.work(work.id).revision, score.revision);
-  assert.equal(readFileSync(store.filePath(work.id, 'abc'), 'utf8'), compiled.abc);
-  assert.deepEqual(readFileSync(store.filePath(work.id, 'mid')), compiled.midi);
+  assert.equal(readFileSync(store.filePath(work.id, 'wav'), 'utf8'), 'test');
+  assert.throws(() => store.filePath(work.id, 'mid'), /无效/);
+  assert.throws(() => store.filePath(work.id, 'abc'), /无效/);
   assert.throws(() => store.filePath('../../bad', 'wav'), /无效/);
 });
 test('title and instrument edits also invalidate stale revision tokens', t => {
@@ -141,6 +298,8 @@ test('headless sampled renderer emits stereo PCM and preserves audible dynamics'
   };
   assert.ok(rms(1.05, 1.3) > rms(0.05, 0.3) * 1.5);
   assert.ok(result.peak > 0.001 && result.peak <= 0.951);
+  assert.ok(Number.isFinite(result.rmsDb) && result.rmsDb < 0);
+  assert.ok(Number.isFinite(result.peakDb) && result.peakDb <= -0.4);
 });
 test('renderer prevents overlapping jobs and reports a missing soundfont', async t => {
   const renderer = new AudioRenderer(), midi = compileAbc(phrase('C4 |]')).midi;
@@ -150,14 +309,72 @@ test('renderer prevents overlapping jobs and reports a missing soundfont', async
   await rendering;
   await assert.rejects(renderer.render(midi, join(tmpdir(), 'missing-abc-music-font.sf2')), /找不到/);
 });
-test('tool return delivery creates a score visible to the panel plus WAV/MIDI/snapshot', async t => {
+test('tool return delivery creates a score plus a WAV-only work record', async t => {
   const { world } = worldFor(t);
   const result = await world.tools()[1].handler({ abc: phrase('C4 |]'), delivery: 'return' });
   assert.ok(!result.failed, result.text); assert.equal(result.blobs[0].mime, 'audio/wav');
+  assert.match(result.text, /声部：/); assert.match(result.text, /响度：/);
   const scores = await world.invoke('scores', 'list'); assert.equal(scores.items.length, 1);
   const works = await world.invoke('works', 'list'); assert.equal(works.items.length, 1);
+  assert.equal(works.items[0].analysis.bars, 1);
+  assert.equal(works.items[0].abc, undefined);
+  assert.equal(existsSync(join(world.store.dir, 'works', `${works.items[0].id}.mid`)), false);
+  assert.equal(existsSync(join(world.store.dir, 'works', `${works.items[0].id}.abc`)), false);
   const file = await world.invoke('works', 'file', [{ id: works.items[0].id, format: 'wav' }]);
   assert.equal(file.$file.sha256, createHash('sha256').update(result.blobs[0].bytes).digest('hex'));
+});
+test('the scores panel exports a MIDI file on demand', async t => {
+  const { world } = worldFor(t);
+  const plain = await world.invoke('scores', 'midi', [{ abc: phrase('C4 |]') }]);
+  assert.equal(plain.$binary.mime, 'audio/midi');
+  const bytes = Buffer.from(plain.$binary.base64, 'base64');
+  assert.equal(bytes.toString('ascii', 0, 4), 'MThd');
+  const saved = await world.invoke('scores', 'save', [{ abc: phrase('"C" C E G c |]'), backing: 'band', groove: 'lofi', energy: 2 }]);
+  const withBand = await world.invoke('scores', 'midi', [{ score: saved.id }]);
+  const bandBytes = Buffer.from(withBand.$binary.base64, 'base64');
+  const song = BasicMIDI.fromArrayBuffer(bandBytes.buffer.slice(bandBytes.byteOffset, bandBytes.byteOffset + bandBytes.byteLength));
+  assert.ok(song.tracks.length > 2);
+});
+
+test('a rejected score is kept as a draft that can be read back', async t => {
+  const { world } = worldFor(t), tool = world.tools()[0];
+  const checked = await tool.handler({ action: 'check', abc: 'X:1\nM:4/4\nL:1/4\nK:C\nH9 |]', title: 'Bad' });
+  assert.equal(checked.failed, true);
+  assert.match(checked.text, /草稿已保留/);
+  const drafts = JSON.parse((await tool.handler({ action: 'drafts' })).text);
+  assert.equal(drafts.length, 1);
+  assert.equal(drafts[0].title, 'Bad');
+  assert.ok(drafts[0].problems.length >= 2);
+  const draft = JSON.parse((await tool.handler({ action: 'draft', id: drafts[0].id })).text);
+  assert.match(draft.abc, /H9/);
+  assert.equal(draft.draft, true);
+  const got = JSON.parse((await tool.handler({ action: 'get', id: drafts[0].id })).text);
+  assert.equal(got.draft, true);
+});
+test('the play tool can render abcjs backing and records it on the work', async t => {
+  const { world } = worldFor(t);
+  const result = await world.tools()[1].handler({ abc: phrase('"C" C E G B | "F" F A c A |]'), backing: 'abcjs', delivery: 'return' });
+  assert.ok(!result.failed, result.text);
+  assert.match(result.text, /伴奏 abcjs/);
+  const works = await world.invoke('works', 'list');
+  assert.equal(works.items[0].backing, 'abcjs');
+  assert.ok(works.items[0].backingNotes > 0);
+  assert.equal(works.items[0].analysis.backing, 'abcjs');
+});
+test('the play tool can render band backing and records groove and energy', async t => {
+  const { world } = worldFor(t);
+  const result = await world.tools()[1].handler({
+    abc: phrase('"C" E G c B | "Am" A c e d |]'), backing: 'band', groove: 'lofi', energy: 2, delivery: 'return',
+  });
+  assert.ok(!result.failed, result.text);
+  assert.match(result.text, /伴奏 band（lofi，能量 2）/);
+  const works = await world.invoke('works', 'list');
+  assert.equal(works.items[0].backing, 'band');
+  assert.equal(works.items[0].groove, 'lofi');
+  assert.equal(works.items[0].energy, 2);
+  assert.ok(works.items[0].backingNotes > 0);
+  assert.equal(works.items[0].analysis.groove, 'lofi');
+  assert.equal(works.items[0].analysis.energy, 2);
 });
 test('event delivery honors archive/model and reports a failed event honestly', async t => {
   const { world } = worldFor(t), events = [];

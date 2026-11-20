@@ -71,4 +71,31 @@ describe('本机变声子进程', () => {
       engine.dispose();
     }
   });
+
+  it('闲置 0 常驻：到时不退出', async () => {
+    const engine = new RvcEngine({ command: process.execPath, args: ['-e', STUB], idleMs: 0 });
+    try {
+      await engine.convert(request());
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      expect(engine.state().phase).toBe('ready');
+    } finally {
+      engine.dispose();
+    }
+  });
+
+  it('getter 热改后 refreshIdle 立刻按新值重算', async () => {
+    let ms = 0;
+    const engine = new RvcEngine({ command: process.execPath, args: ['-e', STUB], idleMs: () => ms });
+    try {
+      await engine.convert(request());
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      expect(engine.state().phase).toBe('ready');
+      ms = 30;
+      engine.refreshIdle();
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      expect(engine.state().phase).toBe('stopped');
+    } finally {
+      engine.dispose();
+    }
+  });
 });

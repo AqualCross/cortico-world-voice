@@ -116,7 +116,7 @@ export class GptSovitsService {
 
   constructor(
     private readonly setup: GptSovitsSetup,
-    private readonly opts: { idleMs?: number; readyMs?: number } = {},
+    private readonly opts: { idleMs?: number | (() => number); readyMs?: number } = {},
   ) {}
 
   get running(): boolean {
@@ -226,9 +226,18 @@ export class GptSovitsService {
     throw new Error(`GPT-SoVITS 服务 ${Math.round(readyMs / 60_000)} 分钟没就绪。${raw ? `\n${raw}` : ''}`);
   }
 
+  /** 配置热改后按新值重算闲置计时。 */
+  refreshIdle(): void {
+    this.touchIdle();
+  }
+
   private touchIdle(): void {
     if (this.idle) clearTimeout(this.idle);
-    this.idle = setTimeout(() => void this.stop(), this.opts.idleMs ?? 5 * 60_000);
+    this.idle = null;
+    const raw = typeof this.opts.idleMs === 'function' ? this.opts.idleMs() : this.opts.idleMs;
+    const ms = raw ?? 5 * 60_000;
+    if (ms <= 0) return;
+    this.idle = setTimeout(() => void this.stop(), ms);
     this.idle.unref?.();
   }
 }

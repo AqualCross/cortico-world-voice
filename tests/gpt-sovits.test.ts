@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync, lstatSync, readlinkSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { gptSovitsMissing, inferConfig, linkPretrainedModels, type GptSovitsSetup } from '../src/gpt-sovits.ts';
+import { gptSovitsMissing, inferConfig, linkPretrainedModels, GptSovitsService, type GptSovitsSetup } from '../src/gpt-sovits.ts';
 
 let dir: string;
 const setup = (): GptSovitsSetup => ({
@@ -64,5 +64,29 @@ describe('本机 GPT-SoVITS', () => {
     linkPretrainedModels(setup());
     expect(resolve(readlinkSync(join(dir, 'GPT_SoVITS', 'pretrained_models')))).toBe(resolve(setup().modelsDir));
     expect(lstatSync(join(dir, 'GPT_SoVITS', 'pretrained_models')).isSymbolicLink()).toBe(true);
+  });
+
+  it('闲置 0 常驻；getter 热改后 refreshIdle 重算计时', async () => {
+    // node 把 api_v2.py 当 JS 跑：就绪行骗过等待循环，进程留着等闲置计时。
+    writeFileSync(join(dir, 'api_v2.py'), 'process.stderr.write("Uvicorn running on http://127.0.0.1:1\\n"); setInterval(() => {}, 1000);');
+    let ms = 0;
+    const service = new GptSovitsService({ ...setup(), python: process.execPath }, { idleMs: () => ms, readyMs: 5000 });
+    let pid = 0;
+    try {
+      await service.start();
+      pid = (service as unknown as { child: { pid: number } }).child.pid;
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(service.running).toBe(true);
+      ms = 60;
+      service.refreshIdle();
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      expect(service.running).toBe(false);
+    } finally {
+      await service.stop();
+      // taskkill 异步且这台机器上偏慢；等 stub 真正退出，afterEach 才删得动它的 cwd。
+      const deadline = Date.now() + 3000;
+      const alive = (): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
+      while (pid && alive() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100));
+    }
   });
 });

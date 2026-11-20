@@ -41,7 +41,7 @@ export class RvcEngine {
     command: string;
     args: string[];
     env?: Record<string, string>;
-    idleMs?: number;
+    idleMs?: number | (() => number);
     timeoutMs?: number;
   }) {}
 
@@ -155,9 +155,17 @@ export class RvcEngine {
     });
   }
 
+  /** 配置热改后按新值重算闲置计时。 */
+  refreshIdle(): void {
+    this.touchIdle();
+  }
+
   private touchIdle(): void {
     this.clearIdle();
-    this.idle = setTimeout(() => this.kill('空闲退出'), this.opts.idleMs ?? 5 * 60_000);
+    const raw = typeof this.opts.idleMs === 'function' ? this.opts.idleMs() : this.opts.idleMs;
+    const ms = raw ?? 5 * 60_000;
+    if (ms <= 0) return;
+    this.idle = setTimeout(() => this.kill('空闲退出'), ms);
     this.idle.unref?.();
   }
 

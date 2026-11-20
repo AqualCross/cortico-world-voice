@@ -44,7 +44,11 @@ export interface AudioConfigSection {
       /** 音调相对 Hz（-50 到 +50）。 */
       pitch: number;
     };
-    gptSovits: { tier: Tier; refAudio: string; refText: string; speed: number };
+    gptSovits: {
+      tier: Tier; refAudio: string; refText: string; speed: number;
+      /** 闲置这么多分钟自动停；0 常驻。 */
+      idleMinutes: number;
+    };
     dashscope: {
       baseUrl: string;
       model: string;
@@ -73,6 +77,8 @@ export interface AudioConfigSection {
     pitch: number;
     indexRate: number;
     protect: number;
+    /** 闲置这么多分钟退出；0 常驻。 */
+    idleMinutes: number;
   };
   sing: {
     engine: SingEngine;
@@ -88,6 +94,8 @@ export interface AudioConfigSection {
     seed: number;
     /** 唱完再走一遍变声，用「变声」页选中的音色；默认关。 */
     convert: boolean;
+    /** 闲置这么多分钟退出；0 常驻。 */
+    idleMinutes: number;
   };
   listen: {
     /** 默认切分方式；每路可以单独覆盖（存在 lanes.json）。 */
@@ -122,7 +130,11 @@ export interface AudioConfigSection {
     sampleRate: number;
     /** 单次请求的音频大小上限（MB）。 */
     maxMb: number;
-    sensevoice: { modelDir: string };
+    sensevoice: {
+      modelDir: string;
+      /** 闲置这么多分钟退出；0 常驻。 */
+      idleMinutes: number;
+    };
     moonshine: { modelDir: string };
     dashscope: { baseUrl: string; model: string; apiKeySecret: string; itn: boolean; keepDialect: boolean };
     openai: { baseUrl: string; model: string; apiKeySecret: string };
@@ -135,7 +147,7 @@ export const AUDIO_DEFAULTS: AudioConfigSection = {
   ffmpegPath: '',
   volume: 80,
   balance: 0,
-  music: { abc: { instrument: '', delivery: 'event', eventDelivery: 'archive' } },
+  music: { abc: { instrument: '', backing: 'off', groove: 'pop', energy: 3, delivery: 'event', eventDelivery: 'archive' } },
   subtitle: {
     enabled: true,
     size: 34,
@@ -147,7 +159,7 @@ export const AUDIO_DEFAULTS: AudioConfigSection = {
     engine: 'edge',
     textLang: 'auto',
     edge: { voice: 'zh-CN-XiaoyiNeural', rate: 0, pitch: 0 },
-    gptSovits: { tier: 'auto', refAudio: '', refText: '', speed: 1 },
+    gptSovits: { tier: 'auto', refAudio: '', refText: '', speed: 1, idleMinutes: 5 },
     dashscope: {
       // 千问AI平台官方入口（platform.qianwenai.com），不是私有域名。
       baseUrl: 'https://maas.qianwenaiapi.com',
@@ -176,6 +188,7 @@ export const AUDIO_DEFAULTS: AudioConfigSection = {
     pitch: 0,
     indexRate: 0.3,
     protect: 0.33,
+    idleMinutes: 5,
   },
   sing: {
     engine: 'diffsinger',
@@ -186,6 +199,7 @@ export const AUDIO_DEFAULTS: AudioConfigSection = {
     scale: 'major',
     seed: 0,
     convert: false,
+    idleMinutes: 5,
   },
   listen: {
     vad: {
@@ -207,7 +221,7 @@ export const AUDIO_DEFAULTS: AudioConfigSection = {
     context: '',
     sampleRate: 0,
     maxMb: 10,
-    sensevoice: { modelDir: '' },
+    sensevoice: { modelDir: '', idleMinutes: 10 },
     moonshine: { modelDir: '' },
     dashscope: { baseUrl: 'https://dashscope.aliyuncs.com', model: 'qwen3-asr-flash', apiKeySecret: 'AUDIO_API_KEY', itn: false, keepDialect: false },
     openai: { baseUrl: 'https://api.openai.com/v1', model: 'whisper-1', apiKeySecret: 'OPENAI_API_KEY' },
@@ -363,6 +377,15 @@ export const AUDIO_CONFIG_GROUP: ConfigGroup = {
         multipleOf: 0.05,
         'x-hot': true,
       },
+      [`${K}.speak.gptSovits.idleMinutes`]: {
+        type: 'number',
+        title: '闲置分钟',
+        description: '空闲这么多分钟就停掉本机服务，释放显存；下一句自动重拉。0 为常驻不停。',
+        minimum: 0,
+        maximum: 120,
+        multipleOf: 1,
+        'x-hot': true,
+      },
       [`${K}.speak.dashscope.baseUrl`]: {
         type: 'string',
         title: 'DashScope 地址',
@@ -512,6 +535,15 @@ export const AUDIO_CONFIG_GROUP: ConfigGroup = {
         multipleOf: 0.01,
         'x-hot': true,
       },
+      [`${K}.convert.idleMinutes`]: {
+        type: 'number',
+        title: '闲置分钟',
+        description: '空闲这么多分钟就退出变声进程，让出显存；下次变声再拉起。0 为常驻不退出。',
+        minimum: 0,
+        maximum: 120,
+        multipleOf: 1,
+        'x-hot': true,
+      },
 
       [`${K}.sing.engine`]: {
         type: 'string',
@@ -569,6 +601,15 @@ export const AUDIO_CONFIG_GROUP: ConfigGroup = {
         type: 'boolean',
         title: '唱完变声',
         description: '唱完再过一遍「变声」页的 RVC 音色；多一趟推理，默认关。',
+        'x-hot': true,
+      },
+      [`${K}.sing.idleMinutes`]: {
+        type: 'number',
+        title: '闲置分钟',
+        description: '空闲这么多分钟就退出唱歌进程，把内存还给别的引擎；下次唱再拉起。0 为常驻不退出。',
+        minimum: 0,
+        maximum: 120,
+        multipleOf: 1,
         'x-hot': true,
       },
 
@@ -696,6 +737,15 @@ export const AUDIO_CONFIG_GROUP: ConfigGroup = {
         title: 'SenseVoice 目录',
         description: '留空用依赖页装的那一套。',
         'x-path': { kind: 'directory' },
+        'x-hot': true,
+      },
+      [`${K}.stt.sensevoice.idleMinutes`]: {
+        type: 'number',
+        title: '闲置分钟',
+        description: '空闲这么多分钟就退出识别进程，省内存；下次转写再拉起。0 为常驻不退出。',
+        minimum: 0,
+        maximum: 120,
+        multipleOf: 1,
         'x-hot': true,
       },
       [`${K}.stt.moonshine.modelDir`]: {

@@ -14,6 +14,7 @@ Owner: `src/definition.ts`
 | `src/music-process.ts` | 分离/混音任务、历史与输出文件 |
 | `src/music-demucs.ts` | Demucs ONNX 源码、环境、权重三个阶段的获取与续装 |
 | `src/music-abc/` | 从 ABC 音乐扩展迁入的曲谱、音源与 WAV 渲染实现 |
+| `src/music-abc/band.js` | 律动表、和弦时间轴与 comp/bass/drums 编曲；把结果并进 abcjs MIDI |
 | `src/webui/music.ts` | 「音乐」与分离、混音、ABC 二级页 |
 | `src/gpu.ts` | `nvidia-smi` 检测、解析与选档（≥ 4 GB 走显卡档） |
 | `src/uv.ts` | uv 识别（配置 → PATH → 常见位置 → 自己装的那份）与安装 |
@@ -65,7 +66,7 @@ Owner: `src/definition.ts`
 - `audio_listen`：开始 / 停止 / 查看监听；状态里带每路的电平、块数与最近听到的几句。
 - `audio_convert`：把一段音频换成当前变声音色；立刻回执，成功进语音记录并自动播放；`silent` 不播放，完成以 `audio.convert_done` 带回路径与音频附件句柄。失败走 `audio.failed`。
 - `audio_sing`：把歌词唱出来（DiffSinger）；立刻回执，成功进语音记录并自动播放；`silent` 不播放，完成以 `audio.sing_done` 带回路径与音频附件句柄。失败走 `audio.failed`。
-- `audio_play` / `audio_queue` / `audio_status`：播放队列与状态。`audio_play` 可按条指定音量与左右平衡（`balance`，-100–100）。播放、变声、转写都接受本地路径或 Core 的 `log:`/`mem:` 附件句柄。
+- `audio_play` / `audio_open` / `audio_queue` / `audio_status`：播放、系统播放器打开、播放队列与状态。`audio_play` 可按条指定音量与左右平衡（`balance`，-100–100）；`audio_open` 用系统默认播放器打开文件，不走队列。播放、变声、转写都接受本地路径或 Core 的 `log:`/`mem:` 附件句柄。
 - `audio_separate`：后台把歌曲分成人声与伴奏，完成以 `audio.separated` 带回两个路径。
 - `audio_mix`：按每轨音量（0–200%）与延迟（秒）混合 1–16 条本地音轨，完成以 `audio.mixed` 带回 WAV 路径。
 - `audio_abc_music_score` / `audio_abc_music_play` / `audio_abc_music_control`：沿用 ABC 音乐扩展的工具；事件交付改用 `audio.abc_played`，来源为 `external`。
@@ -74,9 +75,11 @@ Owner: `src/definition.ts`
 
 ## 音乐
 
+音乐页一级页签：**分离、混音、作曲、编曲、音源、记录**。原 ABC 子页提升到这一级；「作曲」是原乐谱页，「音源」是原乐器页，「作品」并入「记录」。记录里的作曲成品只保存 WAV，和分离/混音记录用同一种卡片；不再保存谱面快照或 MIDI/ABC 文件。
+
 - **分离**：在「依赖」页的「Demucs 分离」行获取，分离页也保留同一任务的快捷入口。按「源码 → 环境 → 权重」顺序获取：校验并解压 `demucs-onnx` 0.3.4 源码、建立独立 Python 环境、下载 htdemucs ONNX 权重（约 166 MB）。检测到 NVIDIA 显卡时装 `onnxruntime-gpu`（把 CUDA 13 与 cuDNN 9 运行库一起放进环境，首次约 1.5 GB），分离默认走显卡；驱动或运行库不齐时自动退回 CPU，任务详情里会显示实际执行器。没有显卡时只装 CPU 版，两种档位都不需要 torch 或 torchaudio。各阶段独立显示状态，重试跳过已完成阶段；输出人声与伴奏 WAV，支持取消、试听、复制路径和加入混音。源码、环境和权重分别保存在 `runtimes/audio/demucs-onnx/source/0.3.4`、`runtimes/audio/demucs-onnx/.venv`、`models/audio/demucs-onnx`；旧版 PyTorch 的目录另行保留。
-- **混音**：需要 ffmpeg，可从本机文件、分离结果或 ABC 作品添加音轨，设置各轨音量与开始时间，生成立体声 WAV。最长一轨结束后收尾，并限制峰值避免削波；任务在后台执行，可取消。
-- **ABC**：完整迁入 `cortico-world-music-abc` 的乐谱编辑、五线谱预览、试听、WAV/MIDI/ABC 作品与 SF2/SF3 音源管理。默认不附带采样音源；可在「乐器」获取 GeneralUser GS 或导入本机音源，保留原有许可提示。作品可以加入混音。
+- **混音**：需要 ffmpeg，可从本机文件、分离结果或作曲作品添加音轨，设置各轨音量与开始时间，生成立体声 WAV。最长一轨结束后收尾，并限制峰值避免削波；任务在后台执行，可取消。
+- **作曲 / 编曲 / 音源**：完整迁入 `cortico-world-music-abc` 的乐谱编辑、五线谱预览、试听、WAV 记录与 SF2/SF3 音源管理。默认不附带采样音源；可在「音源」获取 GeneralUser GS 或导入本机音源，保留原有许可提示。成品并入「记录」，只留 WAV，可以加入混音；不再提供谱面快照、MIDI/ABC 文件、打开文件夹或刷新按钮。需要 MIDI 时，在「作曲」或「编曲」页点「导出 MIDI」，按当前谱子和编曲设置即时生成下载，不落 MIDI 文件。渲染回执列出测量事实：时长与小节、各声部音域、超出常见音域的音、重复小节、节奏种类、级进/跳进、和弦冲突音，以及成品的整体 RMS 与峰值。引号和弦默认只作标签；「自动伴奏」可选 `off` / `abcjs` / `band`：`abcjs` 是自带的简单低音+和弦，`band` 用 compose 的编曲器按律动生成完整的和弦、贝斯、鼓、过门和停顿，支持 pop、rock、ballad、bossa、samba、swing、waltz、funk、lofi、dance、ambient，`energy` 1–5 控制密度，`sections` 可按小节覆盖律动/能量；写谱和乐谱版本不变，伴奏只进渲染出的 MIDI/WAV。「编曲」是一级页，自动伴奏的开关、律动、能量和分段都在这里设置；「作曲」页只写谱/检查/保存，不再重复这些控件。编曲页可对已保存的乐谱试听/生成 band 伴奏，并把设置保存回乐谱。写谱支持动机宏（`% motif 名字: ...`、`@名字+1`）和按命名块局部修订（`% block: A` … `% end: A`，`action=revise`），不必整份重抄。检查或渲染失败时，整份 ABC 作为草稿保留，`audio_abc_music_score` 的 `drafts` / `draft` 动作可以取回。
 
 数据存放在 `<dataDir>/audio/music/`：分离与混音各自保存任务与输出，ABC 数据在 `abc/`。ABC 设置在 `worlds.audio.music.abc`，工具说明沿用声音扩展的统一「工具」页。原独立 ABC 扩展的数据目录与配置保留。
 
@@ -144,7 +147,8 @@ SenseVoice 的情感与音频事件（笑声、掌声、背景音乐等）跟正
 - **uv**：先看配置，再认 PATH 上的 `uv`（裸名直接用，不解析、不写回）；找不到才下载官方独立包到
   World 数据目录（不写系统 PATH、不改系统环境）。
 - **ffmpeg**：先看配置，再从 PATH 解析出真实路径（用户装在哪就认哪，不猜目录）；识别到的路径会写回配置。
-  缺失可下载静态包，只留 `ffmpeg.exe` 与 `ffprobe.exe`。
+  缺失可下载静态包，只留 `ffmpeg.exe` 与 `ffprobe.exe`。BtbN 的 autobuild 只留几天，所以走资产名固定的 `latest`，
+  下载前从同一 release 的 `checksums.sha256` 现取 SHA-256。
 - **GPT-SoVITS 源码**：按上游 commit 下载到 `<部署根>/runtimes/audio/gpt-sovits/<commit>/`。
 - **GPT-SoVITS 权重**：按当前推理档下载到 `<部署根>/models/audio/gpt-sovits/`，逐个校验大小与 SHA-256。
 - **RVC**：上游源码 + ContentVec / RMVPE 资产（`models/audio/rvc/`），再在项目目录里建自己的 Python 环境（torch 按档位 + 推理依赖）。

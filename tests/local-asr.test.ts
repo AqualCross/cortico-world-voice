@@ -47,4 +47,37 @@ describe('本机识别子进程', () => {
       asr.dispose();
     }
   });
+
+  it('闲置 0 常驻：到时不杀进程', async () => {
+    const asr = new LocalAsr({ command: process.execPath, args: ['-e', STUB], idleMs: 0 });
+    try {
+      await asr.transcribe(Buffer.from('x'));
+      const child = (asr as unknown as { child: unknown }).child;
+      expect(child).not.toBeNull();
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      expect((asr as unknown as { child: unknown }).child).toBe(child);
+    } finally {
+      asr.dispose();
+    }
+  });
+
+  it('getter 热改后 refreshIdle 立刻按新值重算', async () => {
+    let ms = 30;
+    const asr = new LocalAsr({ command: process.execPath, args: ['-e', STUB], idleMs: () => ms });
+    try {
+      await asr.transcribe(Buffer.from('x'));
+      ms = 0;
+      asr.refreshIdle();
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      expect((asr as unknown as { child: unknown }).child).not.toBeNull();
+      ms = 30;
+      asr.refreshIdle();
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      // kill 后下一次调用静默拉起新进程。
+      expect((asr as unknown as { child: unknown }).child).toBeNull();
+      expect((await asr.transcribe(Buffer.from('z'))).text).toBe('第2条');
+    } finally {
+      asr.dispose();
+    }
+  });
 });

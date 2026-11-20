@@ -27,15 +27,36 @@ try {
   let peak = 0;
   for (let i = 0; i < count; i++) peak = Math.max(peak, Math.abs(left[i]), Math.abs(right[i]));
   if (!Number.isFinite(peak) || peak < 1e-7) throw new Error('音源输出为空或无效。');
-  // A fixed gain preserves dynamics across works; only turn down to prevent clipping.
-  const gain = Math.min(2.5, 0.95 / peak);
-  const fadeStart = count - Math.floor(sampleRate * 0.04);
-  for (let i = 0; i < count; i++) {
-    const fade = i >= fadeStart ? (count - 1 - i) / (count - fadeStart) : 1;
-    left[i] *= gain * fade; right[i] *= gain * fade;
+  // Normalize to a high percentile so one transient does not decide the whole song;
+  // a soft knee catches the few peaks above it, and a short fade removes the tail click.
+  const hop = 2048, peaks = [];
+  for (let i = 0; i < count; i += hop) {
+    let local = 0;
+    for (let k = i; k < Math.min(count, i + hop); k++) local = Math.max(local, Math.abs(left[k]), Math.abs(right[k]));
+    peaks.push(local);
   }
+  peaks.sort((a, b) => a - b);
+  const reference = peaks[Math.floor(peaks.length * 0.995)] || 1e-6;
+  const gain = Math.min(2.5, 0.8 / reference);
+  const knee = 0.8, ceiling = 0.95;
+  const shape = value => {
+    const magnitude = Math.abs(value);
+    if (magnitude <= knee) return value;
+    return Math.sign(value) * (knee + (ceiling - knee) * Math.tanh((magnitude - knee) / (ceiling - knee)));
+  };
+  const fadeLength = Math.min(count, Math.floor(sampleRate * 0.5));
+  let masteredPeak = 0, sumSq = 0;
+  for (let i = 0; i < count; i++) {
+    const fade = i >= count - fadeLength ? (count - 1 - i) / fadeLength : 1;
+    left[i] = shape(left[i] * gain) * fade;
+    right[i] = shape(right[i] * gain) * fade;
+    masteredPeak = Math.max(masteredPeak, Math.abs(left[i]), Math.abs(right[i]));
+    sumSq += (left[i] * left[i] + right[i] * right[i]) / 2;
+  }
+  const rmsDb = 10 * Math.log10(sumSq / Math.max(1, count) + 1e-12);
+  const peakDb = 20 * Math.log10(Math.max(1e-12, masteredPeak));
   const wav = audioToWav([left, right], sampleRate);
-  parentPort.postMessage({ wav, seconds: count / sampleRate, peak: peak * gain, sampleRate }, [wav]);
+  parentPort.postMessage({ wav, seconds: count / sampleRate, peak: masteredPeak, peakDb, rmsDb, sampleRate }, [wav]);
 } catch (error) {
   parentPort.postMessage({ error: error instanceof Error ? error.message : String(error) });
 }

@@ -21,3 +21,25 @@ export function instrumentOf(id = 'nylon-guitar') {
   return found;
 }
 export const presetId = (file, preset) => `sf:${encodeURIComponent(file)}:${preset.bankMSB}:${preset.bankLSB}:${preset.program}:${preset.isGMGSDrum ? 1 : 0}`;
+
+/**
+ * Usual written range of a General MIDI program, in MIDI note numbers. These are
+ * report-only bounds: a note outside them still renders. Programs without an entry
+ * (including drums) are not checked.
+ */
+const RANGES = new Map([
+  [0, [28, 103]], [4, [36, 96]], [6, [36, 89]], [8, [60, 108]], [9, [72, 108]],
+  [10, [60, 96]], [11, [53, 89]], [12, [45, 96]], [16, [36, 96]], [21, [53, 89]],
+  [22, [60, 96]], [24, [40, 84]], [25, [40, 84]], [26, [40, 84]], [27, [40, 86]],
+  [29, [40, 86]], [32, [28, 55]], [33, [28, 60]], [35, [28, 60]], [38, [28, 60]],
+  [40, [55, 100]], [41, [48, 88]], [42, [36, 76]], [45, [36, 96]], [46, [31, 100]],
+  [48, [36, 96]], [52, [48, 81]], [56, [55, 84]], [57, [40, 72]], [59, [55, 84]],
+  [60, [41, 77]], [61, [40, 84]], [64, [56, 87]], [65, [49, 80]], [66, [44, 75]],
+  [68, [58, 91]], [71, [50, 91]], [72, [74, 108]], [73, [60, 96]], [74, [60, 96]],
+  [75, [60, 96]], [77, [55, 91]], [78, [60, 96]], [79, [60, 91]], [80, [48, 96]],
+  [81, [48, 96]], [89, [36, 96]], [107, [43, 91]], [108, [48, 96]], [114, [52, 89]],
+]);
+
+export function rangeOfProgram(program) {
+  return RANGES.get(Number(program)) ?? null;
+}
